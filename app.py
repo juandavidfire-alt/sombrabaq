@@ -4,6 +4,19 @@ import folium, pandas as pd, requests, streamlit as st
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="SombraBAQ | Observatorio climático", page_icon=":material/park:", layout="wide")
+
+def gee_service_account_credentials(info):
+    from google.oauth2 import service_account
+
+    account_info = dict(info)
+    account_info["private_key"] = str(account_info.get("private_key") or "").replace("\\n", "\n").strip()
+    account_info.setdefault("token_uri", "https://oauth2.googleapis.com/token")
+    return service_account.Credentials.from_service_account_info(
+        account_info,
+        scopes=["https://www.googleapis.com/auth/earthengine"],
+    )
+
+
 with st.expander("Diagnóstico temporal de Earth Engine"):
     info = None
     try:
@@ -34,13 +47,15 @@ with st.expander("Diagnóstico temporal de Earth Engine"):
                 try:
                     import ee
 
-                    credentials = ee.ServiceAccountCredentials(email, key_data=private_key)
+                    credentials = gee_service_account_credentials(info)
                     ee.Initialize(credentials, project=project_id)
                     resultado = ee.Number(1).getInfo()
                     st.success(f"Earth Engine conectado: {resultado}")
                 except Exception as error:
-                    mensaje = str(error).replace(private_key, "[clave privada oculta]")
-                    mensaje = mensaje.replace(email, "[correo de cuenta de servicio]")
+                    mensaje = str(error)
+                    for secreto in (private_key, private_key.replace("\n", "\\n"), email):
+                        if secreto:
+                            mensaje = mensaje.replace(secreto, "[dato sensible oculto]")
                     st.error(f"Error de conexión: {type(error).__name__}")
                     if mensaje:
                         st.code(mensaje[:600])
@@ -167,20 +182,18 @@ def init_ee():
             info = None
 
         if info:
-            email = str(info.get("client_email", "")).strip()
-            private_key = str(info.get("private_key", "")).replace("\\n", "\n").strip()
             project_id = str(info.get("project_id", "")).strip()
             missing = [
                 name for name, value in (
-                    ("client_email", email),
-                    ("private_key", private_key),
+                    ("client_email", str(info.get("client_email") or "").strip()),
+                    ("private_key", str(info.get("private_key") or "").strip()),
                     ("project_id", project_id),
                 )
                 if not value
             ]
             if missing:
                 return "Faltan campos de Google Earth Engine en [gee_service_account]: " + ", ".join(missing)
-            credentials = ee.ServiceAccountCredentials(email, key_data=private_key)
+            credentials = gee_service_account_credentials(info)
             ee.Initialize(credentials, project=project_id)
         else:
             ee.Initialize(project="sombrabaq")
