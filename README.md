@@ -32,9 +32,14 @@ La capa satelital también requiere una cuenta de servicio de Google Earth Engin
 ```toml
 [gee_service_account]
 client_email = "cuenta-servicio@proyecto.iam.gserviceaccount.com"
-private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+private_key = """-----BEGIN PRIVATE KEY-----
+PEGA_AQUI_LA_CLAVE_PRIVADA_COMPLETA
+-----END PRIVATE KEY-----
+"""
 project_id = "id-del-proyecto"
 ```
+
+`private_key` debe ser la clave privada PEM de la cuenta de servicio (no el JSON completo). Registra el proyecto de Google Cloud para Earth Engine, habilita la API de Earth Engine y otorga a la cuenta de servicio acceso al proyecto. Guarda estos secretos solo en Streamlit Cloud; nunca los subas a GitHub ni los compartas en el chat.
 
 Sin esas credenciales, el mapa muestra las mediciones meteorológicas como alternativa y deja la capa satelital deshabilitada.
 

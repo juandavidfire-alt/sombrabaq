@@ -120,10 +120,29 @@ def obtener_saldo(sb, user_id):
 def init_ee():
     try:
         import ee
-        try: info = dict(st.secrets["gee_service_account"])
-        except Exception: info = None
-        if info: ee.Initialize(ee.ServiceAccountCredentials(info["client_email"], key_data=json.dumps(info)), project=info.get("project_id"))
-        else: ee.Initialize(project="sombrabaq")
+        try:
+            info = dict(st.secrets["gee_service_account"])
+        except (KeyError, FileNotFoundError):
+            info = None
+
+        if info:
+            email = str(info.get("client_email", "")).strip()
+            private_key = str(info.get("private_key", "")).replace("\\n", "\n").strip()
+            project_id = str(info.get("project_id", "")).strip()
+            missing = [
+                name for name, value in (
+                    ("client_email", email),
+                    ("private_key", private_key),
+                    ("project_id", project_id),
+                )
+                if not value
+            ]
+            if missing:
+                return "Faltan campos de Google Earth Engine en [gee_service_account]: " + ", ".join(missing)
+            credentials = ee.ServiceAccountCredentials(email, key_data=private_key)
+            ee.Initialize(credentials, project=project_id)
+        else:
+            ee.Initialize(project="sombrabaq")
         return ee
     except Exception as e: return str(e)
 
