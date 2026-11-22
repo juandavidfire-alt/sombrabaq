@@ -13,7 +13,10 @@ def gee_service_account_credentials(info):
     account_info.setdefault("token_uri", "https://oauth2.googleapis.com/token")
     return service_account.Credentials.from_service_account_info(
         account_info,
-        scopes=["https://www.googleapis.com/auth/earthengine"],
+        scopes=[
+            "https://www.googleapis.com/auth/earthengine",
+            "https://www.googleapis.com/auth/cloud-platform",
+        ],
     )
 
 
