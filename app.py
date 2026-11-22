@@ -20,6 +20,17 @@ def gee_service_account_credentials(info):
     )
 
 
+def gee_error_message(error, info):
+    message = str(error)
+    if info:
+        private_key = str(info.get("private_key") or "").replace("\\n", "\n").strip()
+        email = str(info.get("client_email") or "").strip()
+        for secret in (private_key, private_key.replace("\n", "\\n"), email):
+            if secret:
+                message = message.replace(secret, "[dato sensible oculto]")
+    return message[:600]
+
+
 with st.expander("Diagnóstico temporal de Earth Engine"):
     info = None
     try:
@@ -55,13 +66,10 @@ with st.expander("Diagnóstico temporal de Earth Engine"):
                     resultado = ee.Number(1).getInfo()
                     st.success(f"Earth Engine conectado: {resultado}")
                 except Exception as error:
-                    mensaje = str(error)
-                    for secreto in (private_key, private_key.replace("\n", "\\n"), email):
-                        if secreto:
-                            mensaje = mensaje.replace(secreto, "[dato sensible oculto]")
                     st.error(f"Error de conexión: {type(error).__name__}")
+                    mensaje = gee_error_message(error, info)
                     if mensaje:
-                        st.code(mensaje[:600])
+                        st.code(mensaje)
 
 st.markdown("""<style>
 /* CSS Seguro para Modo Claro/Oscuro de Streamlit */
@@ -489,12 +497,20 @@ tabs = dict(zip(nombres_tabs, st.tabs(
 
 # --- PESTAÑA 1: MAPA Y SUGERENCIAS DE SIEMBRA ---
 with tabs[":material/map: Mapa inteligente"]:
-    
+    satellite_error = None
     try:
         df, tiles, meta = satelite(dias)
-    except Exception:
+        if df is None:
+            satellite_error = gee_error_message(
+                meta or "Earth Engine no devolvió detalles del error.",
+                info,
+            )
+            tiles = tiles or {}
+            meta = meta if isinstance(meta, dict) else {}
+    except Exception as error:
+        satellite_error = f"{type(error).__name__}: {gee_error_message(error, info)}"
         df, tiles, meta = None, {}, {}
-    
+
     # 🚨 NOVEDADES Y SUGERENCIAS DE SIEMBRA (La función que pediste restaurar)
     if df is not None and not df.empty:
         peor_zona = df.loc[df['LST (°C)'].idxmax()]
@@ -618,12 +634,16 @@ with tabs[":material/map: Mapa inteligente"]:
             "con datos meteorológicos como alternativa.",
             icon=":material/satellite_alt:",
         )
+        if satellite_error:
+            st.warning("La inicialización o consulta satelital no se completó.")
+            with st.expander("Detalle del error satelital"):
+                st.code(satellite_error)
         with st.expander("¿Por qué no se ve la capa satelital?"):
             st.markdown(
                 "Las imágenes de vegetación y temperatura superficial requieren configurar "
-                "Google Earth Engine. En Streamlit Cloud, agrega las credenciales de una cuenta "
-                "de servicio autorizada bajo `[gee_service_account]` en **Manage app → Settings → Secrets**. "
-                "Mientras tanto, el mapa y las mediciones meteorológicas siguen disponibles."
+                "Google Earth Engine y que el proyecto y la cuenta de servicio estén autorizados. "
+                "Revisa el diagnóstico temporal al inicio de la página. Mientras tanto, el mapa "
+                "y las mediciones meteorológicas siguen disponibles."
             )
 
         mapa_col, panel_col = st.columns([3, 1.1])
