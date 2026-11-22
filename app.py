@@ -88,12 +88,18 @@ def cfg():
 @st.cache_resource
 def pub():
     from supabase import create_client
-    return create_client(*cfg())
+    url, key = cfg()
+    if not key:
+        raise RuntimeError("Supabase no está configurado. Añade [supabase].anon_key en los secretos de la aplicación.")
+    return create_client(url, key)
 
 def sb_client():
     from supabase import create_client
     if "sb" not in st.session_state:
-        st.session_state.sb = create_client(*cfg())
+        url, key = cfg()
+        if not key:
+            raise RuntimeError("Supabase no está configurado. Añade [supabase].anon_key en los secretos de la aplicación.")
+        st.session_state.sb = create_client(url, key)
         st.session_state.user = None; st.session_state.admin = False
     return st.session_state.sb
 
@@ -310,9 +316,17 @@ def sidebar():
     with st.sidebar.container(border=True):
         st.markdown("**Configuración del análisis**")
         dias = st.slider("Ventana satelital", 20, 120, 60, 10, help="Periodo usado para combinar imágenes satelitales.")
+    _, supabase_key = cfg()
+    if not supabase_key:
+        st.sidebar.warning(
+            "La autenticación y las funciones de comunidad requieren configurar Supabase en los secretos de Streamlit Cloud.",
+            title="Supabase pendiente de configuración",
+        )
+        return dias
+
     sb = sb_client()
     
-    if st.session_state.user:
+    if st.session_state.get("user"):
         pf = st.session_state.get("datos_perfil", {})
         with st.sidebar.container(border=True):
             st.markdown(f"**{pf.get('nombre') or 'Ciudadano'}**")
@@ -340,6 +354,20 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True,
 )
+
+if not cfg()[1]:
+    st.warning(
+        "El panel climático sigue disponible, pero inicio de sesión, reportes ciudadanos, comunidad y recompensas "
+        "están pausados hasta configurar Supabase.",
+        title="Configura Supabase para habilitar todas las funciones",
+    )
+    with st.expander("Cómo configurarlo en Streamlit Cloud"):
+        st.markdown("Abre **Manage app → Settings → Secrets** y añade las credenciales de tu proyecto Supabase:")
+        st.code(
+            '[supabase]\nurl = "https://<project-ref>.supabase.co"\nanon_key = "<publishable-or-anon-key>"',
+            language="toml",
+        )
+        st.caption("Copia los valores desde Supabase → Project Settings → API. No publiques ni compartas claves secretas.")
 
 @st.fragment(run_every=60)
 def estado_en_vivo():
