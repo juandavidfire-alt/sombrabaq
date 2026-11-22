@@ -27,6 +27,17 @@ anon_key = "<publishable-or-anon-key>"
 
 Obtén ambos valores en **Supabase → Project Settings → API**. Sin estos secretos, la aplicación mostrará el panel climático, pero deshabilitará las funciones que dependen de la base de datos y la autenticación.
 
+La capa satelital también requiere una cuenta de servicio de Google Earth Engine habilitada y registrada en Cloud:
+
+```toml
+[gee_service_account]
+client_email = "cuenta-servicio@proyecto.iam.gserviceaccount.com"
+private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+project_id = "id-del-proyecto"
+```
+
+Sin esas credenciales, el mapa muestra las mediciones meteorológicas como alternativa y deja la capa satelital deshabilitada.
+
 ## Seguridad inicial
 
 Ejecutar `supabase_security.sql` en el editor SQL de Supabase. La migración agrega:

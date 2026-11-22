@@ -414,7 +414,10 @@ tabs = dict(zip(nombres_tabs, st.tabs(
 # --- PESTAÑA 1: MAPA Y SUGERENCIAS DE SIEMBRA ---
 with tabs[":material/map: Mapa inteligente"]:
     
-    df, tiles, meta = satelite(dias)
+    try:
+        df, tiles, meta = satelite(dias)
+    except Exception:
+        df, tiles, meta = None, {}, {}
     
     # 🚨 NOVEDADES Y SUGERENCIAS DE SIEMBRA (La función que pediste restaurar)
     if df is not None and not df.empty:
@@ -439,7 +442,7 @@ with tabs[":material/map: Mapa inteligente"]:
         except Exception: pass
     panel_vivo()
 
-    if df is not None:
+    if df is not None and not df.empty:
         try: aire = clima_vivo().set_index("Zona")
         except: aire = None
         try:
@@ -533,6 +536,114 @@ with tabs[":material/map: Mapa inteligente"]:
             st.dataframe(dfp, hide_index=True, width="stretch", column_config={"Mapa": st.column_config.LinkColumn("Ubicación", display_text="Abrir en Google Maps")})
             st.caption("Son puntos muestreados por satélite (30 m): pueden ser suelo desnudo, techos o vías. Verifica en campo y coordina con la autoridad ambiental antes de sembrar.")
             st.download_button("⬇️ Descargar plan de siembra (CSV)", dfp.to_csv(index=False), "plan_siembra_sombrabaq.csv", "text/csv")
+    else:
+        st.info(
+            "La capa satelital no está disponible por ahora. Se muestra el mapa de Barranquilla "
+            "con datos meteorológicos como alternativa.",
+            icon=":material/satellite_alt:",
+        )
+        with st.expander("¿Por qué no se ve la capa satelital?"):
+            st.markdown(
+                "Las imágenes de vegetación y temperatura superficial requieren configurar "
+                "Google Earth Engine. En Streamlit Cloud, agrega las credenciales de una cuenta "
+                "de servicio autorizada bajo `[gee_service_account]` en **Manage app → Settings → Secrets**. "
+                "Mientras tanto, el mapa y las mediciones meteorológicas siguen disponibles."
+            )
+
+        mapa_col, panel_col = st.columns([3, 1.1])
+        try:
+            aire_respaldo = clima_vivo().set_index("Zona")
+        except requests.RequestException:
+            aire_respaldo = None
+
+        with mapa_col:
+            from folium.plugins import Fullscreen
+
+            mapa_respaldo = folium.Map(
+                location=[10.97, -74.80],
+                zoom_start=12,
+                min_zoom=11,
+                max_zoom=18,
+                tiles="OpenStreetMap",
+                max_bounds=True,
+                prefer_canvas=True,
+            )
+            for zona, (lat, lng) in ZONAS.items():
+                medicion = aire_respaldo.loc[zona] if aire_respaldo is not None else None
+                if medicion is not None:
+                    temperatura = float(medicion["Temp (°C)"])
+                    color = rampa(temperatura, 28, 36)
+                    detalle = (
+                        f"Temperatura: {temperatura:.1f} °C<br>"
+                        f"Sensación térmica: {medicion['Sensación (°C)']:.1f} °C<br>"
+                        f"Humedad: {medicion['Humedad (%)']:.0f}%<br>"
+                        f"Índice UV: {medicion['UV']:.1f}"
+                    )
+                    etiqueta = f"{temperatura:.1f} °C"
+                else:
+                    color = "#64748b"
+                    detalle = "Mediciones meteorológicas temporalmente no disponibles."
+                    etiqueta = "Sin datos"
+
+                folium.Circle(
+                    [lat, lng],
+                    radius=RADIO_M,
+                    color=color,
+                    weight=2,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.16,
+                ).add_to(mapa_respaldo)
+                folium.CircleMarker(
+                    [lat, lng],
+                    radius=9,
+                    color="white",
+                    weight=2,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=1,
+                    tooltip=f"{zona} · {etiqueta}",
+                    popup=folium.Popup(f"<b>{zona}</b><br>{detalle}", max_width=260),
+                ).add_to(mapa_respaldo)
+
+            Fullscreen().add_to(mapa_respaldo)
+            st_folium(mapa_respaldo, height=600, width=None, returned_objects=[])
+            st.caption(
+                "Mapa base de OpenStreetMap · Los círculos muestran temperatura del aire por zona; "
+                "no representan temperatura superficial satelital."
+            )
+
+        with panel_col:
+            with st.container(border=True):
+                st.markdown("**Condiciones por zona**")
+                zona_respaldo = st.selectbox(
+                    "Zona a inspeccionar",
+                    list(ZONAS),
+                    key="zona_respaldo",
+                )
+                if aire_respaldo is not None:
+                    medicion = aire_respaldo.loc[zona_respaldo]
+                    st.metric(
+                        "Temperatura del aire",
+                        f"{medicion['Temp (°C)']:.1f} °C",
+                        icon=":material/thermostat:",
+                        border=True,
+                    )
+                    st.metric(
+                        "Sensación térmica",
+                        f"{medicion['Sensación (°C)']:.1f} °C",
+                        icon=":material/device_thermostat:",
+                        border=True,
+                    )
+                    st.metric(
+                        "Humedad relativa",
+                        f"{medicion['Humedad (%)']:.0f} %",
+                        icon=":material/humidity_mid:",
+                        border=True,
+                    )
+                    st.caption(f"Actualizado: {medicion['Hora'].replace('T', ' ')}")
+                else:
+                    st.warning("No fue posible consultar el servicio meteorológico.")
 
 # --- PESTAÑA 2: REPORTAR ---
 with tabs[":material/camera_alt: Reportar"]:
