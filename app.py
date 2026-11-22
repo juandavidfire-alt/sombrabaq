@@ -4,6 +4,47 @@ import folium, pandas as pd, requests, streamlit as st
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="SombraBAQ | Observatorio climático", page_icon=":material/park:", layout="wide")
+with st.expander("Diagnóstico temporal de Earth Engine"):
+    info = None
+    try:
+        info = dict(st.secrets["gee_service_account"])
+    except KeyError:
+        st.error("Falta `gee_service_account` en los secretos de Streamlit.")
+    except Exception as error:
+        st.error(f"No se pudo leer `gee_service_account`: {type(error).__name__}")
+
+    if info is not None:
+        st.success("Streamlit encontró las credenciales.")
+        if st.button("Probar conexión con Earth Engine", key="probar_conexion_gee"):
+            email = str(info.get("client_email") or "").strip()
+            private_key = str(info.get("private_key") or "").replace("\\n", "\n").strip()
+            project_id = str(info.get("project_id") or "").strip()
+            missing = [
+                field for field, value in (
+                    ("client_email", email),
+                    ("private_key", private_key),
+                    ("project_id", project_id),
+                )
+                if not value
+            ]
+
+            if missing:
+                st.error("Faltan campos en `gee_service_account`: " + ", ".join(missing))
+            else:
+                try:
+                    import ee
+
+                    credentials = ee.ServiceAccountCredentials(email, key_data=private_key)
+                    ee.Initialize(credentials, project=project_id)
+                    resultado = ee.Number(1).getInfo()
+                    st.success(f"Earth Engine conectado: {resultado}")
+                except Exception as error:
+                    mensaje = str(error).replace(private_key, "[clave privada oculta]")
+                    mensaje = mensaje.replace(email, "[correo de cuenta de servicio]")
+                    st.error(f"Error de conexión: {type(error).__name__}")
+                    if mensaje:
+                        st.code(mensaje[:600])
+
 st.markdown("""<style>
 /* CSS Seguro para Modo Claro/Oscuro de Streamlit */
 .block-container {padding-top:1.25rem !important; padding-bottom:2.5rem !important; max-width:1440px;}
@@ -145,47 +186,6 @@ def init_ee():
             ee.Initialize(project="sombrabaq")
         return ee
     except Exception as e: return str(e)
-
-def mostrar_diagnostico_gee():
-    with st.expander("Diagnóstico temporal de Earth Engine"):
-        try:
-            info = dict(st.secrets["gee_service_account"])
-        except (KeyError, FileNotFoundError):
-            st.error("Falta `gee_service_account` en los secretos de Streamlit.")
-            return
-
-        st.success("Streamlit encontró la sección de credenciales.")
-        if not st.button("Probar conexión con Earth Engine", key="probar_conexion_gee"):
-            return
-
-        email = str(info.get("client_email", "")).strip()
-        private_key = str(info.get("private_key", "")).replace("\\n", "\n").strip()
-        project_id = str(info.get("project_id", "")).strip()
-        missing = [
-            field for field, value in (
-                ("client_email", email),
-                ("private_key", private_key),
-                ("project_id", project_id),
-            )
-            if not value
-        ]
-        if missing:
-            st.error("Faltan campos en `gee_service_account`: " + ", ".join(missing))
-            return
-
-        try:
-            import ee
-
-            credentials = ee.ServiceAccountCredentials(email, key_data=private_key)
-            ee.Initialize(credentials, project=project_id)
-            resultado = ee.Number(1).getInfo()
-            st.success(f"Earth Engine conectado correctamente: {resultado}")
-        except Exception as error:
-            mensaje = str(error).replace(private_key, "[clave privada oculta]")
-            mensaje = mensaje.replace(email, "[correo de cuenta de servicio]")
-            st.error(f"Error de conexión: {type(error).__name__}")
-            if mensaje:
-                st.code(mensaje[:600])
 
 @st.cache_data(ttl=3 * 3600, show_spinner="Consultando satélites (Sentinel-2 y Landsat)…")
 def satelite(dias: int):
@@ -478,7 +478,6 @@ with tabs[":material/map: Mapa inteligente"]:
         df, tiles, meta = satelite(dias)
     except Exception:
         df, tiles, meta = None, {}, {}
-    mostrar_diagnostico_gee()
     
     # 🚨 NOVEDADES Y SUGERENCIAS DE SIEMBRA (La función que pediste restaurar)
     if df is not None and not df.empty:
