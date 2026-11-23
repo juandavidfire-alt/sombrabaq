@@ -61,52 +61,56 @@ with st.expander("Diagnóstico temporal de Earth Engine"):
                         st.code(mensaje[:600])
 
 st.markdown("""<style>
-/* CSS Seguro para Modo Claro/Oscuro de Streamlit */
-.block-container {padding-top:1.25rem !important; padding-bottom:2.5rem !important; max-width:1440px;}
-.hero {background:linear-gradient(118deg,#12372a 0%,#166534 58%,#087f73 100%); border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:1.35rem 1.65rem; margin-bottom:.65rem; color:white; box-shadow:0 10px 28px rgba(18,55,42,.12); position:relative; overflow:hidden;}
-.hero:after {content:""; position:absolute; width:220px; height:220px; right:-70px; top:-130px; border-radius:50%; background:rgba(255,255,255,.07);}
-.hero h1 {margin:.12rem 0 .18rem; font-size:2.05rem; font-weight:800; color:white; letter-spacing:-.035em;}
-.hero p {margin:0; opacity:.88; font-weight:500; font-size:1rem; max-width:760px;}
-.hero .live {background:rgba(255,255,255,.16); padding:.22rem .75rem; border-radius:20px; font-size:.72rem; font-weight:800; letter-spacing:.08em; display:inline-block;}
-.hero .live::before {content:""; display:inline-block;width:.42rem;height:.42rem;border-radius:50%;background:#86efac;margin-right:.45rem;box-shadow:0 0 0 4px rgba(134,239,172,.12);animation:parpadeo 1.5s infinite;}
-@keyframes parpadeo {50% {opacity:.3}}
-@keyframes aparecer {from {opacity:0; transform:translateY(8px)} to {opacity:1; transform:translateY(0)}}
-.hero {animation:aparecer .45s ease-out both;}
-[data-testid="stVerticalBlockBorderWrapper"] {animation:aparecer .32s ease-out both;}
+.block-container {padding:1.45rem 2rem 3.2rem !important; max-width:1520px;}
+.hero {background:radial-gradient(ellipse at 92% 10%,rgba(134,239,172,.2),transparent 30%),linear-gradient(118deg,#102f25 0%,#166534 58%,#087f73 100%); border:1px solid rgba(255,255,255,.18); border-radius:24px; padding:2rem 2.1rem 1.65rem; margin-bottom:1.15rem; color:white; box-shadow:0 16px 42px rgba(18,55,42,.18); position:relative; overflow:hidden; isolation:isolate;}
+.hero:after {content:""; position:absolute; width:320px; height:320px; right:-85px; top:-190px; border-radius:50%; border:1px solid rgba(255,255,255,.13); box-shadow:0 0 0 24px rgba(255,255,255,.035),0 0 0 52px rgba(255,255,255,.025); pointer-events:none; z-index:-1;}
+.hero-kicker {display:inline-flex; align-items:center; gap:.55rem; margin-bottom:.45rem; padding:.34rem .78rem; border:1px solid rgba(255,255,255,.24); border-radius:999px; background:rgba(255,255,255,.11); color:#f0fdf4; font-size:.7rem; font-weight:750; letter-spacing:.1em;}
+.hero-kicker:before {content:""; width:.48rem; height:.48rem; border-radius:50%; background:#86efac; box-shadow:0 0 0 4px rgba(134,239,172,.14); animation:hero-glow 2.4s ease-in-out infinite;}
+.hero h1 {margin:.15rem 0 .3rem; font-size:2.35rem; font-weight:800; color:white; letter-spacing:-.04em; line-height:1.1;}
+.hero p {margin:0; color:rgba(255,255,255,.86); font-weight:450; font-size:1rem; max-width:720px; line-height:1.55;}
+.hero-tags {display:flex; flex-wrap:wrap; gap:.55rem; margin-top:1.15rem;}
+.hero-tag {display:inline-flex; align-items:center; gap:.38rem; padding:.35rem .7rem; border:1px solid rgba(255,255,255,.17); border-radius:999px; background:rgba(4,30,22,.2); color:rgba(255,255,255,.94); font-size:.76rem; font-weight:600;}
+.hero-tag span {color:#bbf7d0;}
+@keyframes hero-glow {50% {opacity:.55; box-shadow:0 0 0 7px rgba(134,239,172,.08);}}
 [data-testid="stSidebar"] {border-right:1px solid rgba(22,101,52,.10);}
-[data-testid="stMetric"] {padding:.15rem .1rem; transition:transform .18s ease, box-shadow .18s ease;}
-[data-testid="stMetric"]:hover {transform:translateY(-2px);}
-[data-testid="stTabs"] [role="tablist"] {gap:.18rem; border-bottom:1px solid rgba(22,101,52,.12); margin-bottom:.7rem;}
-[data-testid="stTabs"] [role="tab"] {padding:.7rem .82rem; border-radius:10px 10px 0 0; transition:background .18s ease, color .18s ease;}
-[data-testid="stTabs"] [role="tab"][aria-selected="true"] {background:rgba(22,101,52,.10); color:#166534;}
-[data-testid="stVerticalBlockBorderWrapper"] {border-radius:12px;}
-[data-testid="stButton"] button {border-radius:9px; transition:transform .15s ease, box-shadow .15s ease;}
-[data-testid="stButton"] button:hover {transform:translateY(-1px); box-shadow:0 5px 14px rgba(22,101,52,.12);}
-[data-testid="stForm"] {border-radius:12px;}
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {margin-top:-.55rem; margin-bottom:.8rem;}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {line-height:1.35;}
-[data-testid="stSlider"] {padding-top:.15rem;}
-[data-testid="stMetricValue"] {letter-spacing:-.025em;}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {line-height:1.45;}
+[data-testid="stTabs"] [role="tablist"] {gap:.3rem; border-bottom:1px solid rgba(22,101,52,.14); margin-bottom:1rem; scrollbar-width:thin;}
+[data-testid="stTabs"] [role="tab"] {padding:.72rem .9rem; border-radius:12px 12px 0 0; transition:background .18s ease, color .18s ease, transform .18s ease;}
+[data-testid="stTabs"] [role="tab"]:hover {background:rgba(22,101,52,.06);}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {background:rgba(22,101,52,.1); color:#166534; font-weight:700; box-shadow:inset 0 -2px #166534;}
+[data-testid="stVerticalBlockBorderWrapper"] {border-radius:16px; transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {border-color:rgba(22,101,52,.23); box-shadow:0 8px 24px rgba(18,55,42,.055);}
+[data-testid="stMetric"] {padding:.35rem .25rem; transition:transform .18s ease;}
+[data-testid="stMetric"]:hover {transform:translateY(-3px);}
+[data-testid="stMetricValue"] {letter-spacing:-.03em;}
+[data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button {border-radius:10px; transition:transform .15s ease, box-shadow .15s ease;}
+[data-testid="stButton"] button:hover, [data-testid="stFormSubmitButton"] button:hover {transform:translateY(-1px); box-shadow:0 5px 14px rgba(22,101,52,.14);}
+[data-testid="stButton"] button:focus-visible, [data-testid="stFormSubmitButton"] button:focus-visible, [data-testid="stTabs"] [role="tab"]:focus-visible {outline:3px solid rgba(22,101,52,.45); outline-offset:2px;}
+[data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {border-color:#166534; box-shadow:0 0 0 .15rem rgba(22,101,52,.14);}
+[data-testid="stForm"] {border-radius:14px;}
+[data-testid="stDataFrame"], [data-testid="stTable"] {border-radius:12px; overflow:hidden;}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {margin-bottom:.65rem;}
+[data-testid="stSlider"] {padding-top:.2rem;}
 ::-webkit-scrollbar {width:8px; height:8px;}
 ::-webkit-scrollbar-thumb {background:#bfd1c4; border-radius:8px;}
 ::-webkit-scrollbar-track {background:transparent;}
-iframe[title="st_folium"] {border-radius:12px; border:1px solid rgba(22,101,52,.12);}
-@media (max-width: 720px) {
-    .block-container {padding-top:.75rem !important;}
-    .hero {padding:1.1rem; border-radius:12px;}
-    .hero h1 {font-size:1.65rem;}
-    .hero p {font-size:.9rem;}
-    [data-testid="stTabs"] [role="tab"] {padding:.55rem .55rem;}
-}
-.live-status {border:1px solid rgba(22,101,52,.16);border-radius:14px;padding:.55rem .8rem;margin:.25rem 0 1rem;background:rgba(240,253,244,.58);}
-.leyenda {height:8px; border-radius:6px; background:linear-gradient(90deg,#22c55e,#a3e635,#facc15,#fb923c,#ef4444); margin:.4rem 0 .2rem}
-.social-card {background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:1.5rem; margin-bottom:1.2rem; transition:transform .2s; box-shadow: 0 4px 6px rgba(0,0,0,0.05);}
-.social-card:hover {transform:translateY(-3px); border-color:#22c55e;}
+iframe[title="st_folium"] {border-radius:16px; border:1px solid rgba(22,101,52,.14);}
+.live-status {border:1px solid rgba(22,101,52,.16); border-radius:14px; padding:.65rem .85rem; margin:.25rem 0 1rem; background:rgba(240,253,244,.58);}
+.leyenda {height:8px; border-radius:6px; background:linear-gradient(90deg,#22c55e,#a3e635,#facc15,#fb923c,#ef4444); margin:.45rem 0 .25rem;}
+.social-card {background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:1.35rem; margin-bottom:1rem; box-shadow:0 4px 14px rgba(0,0,0,.045);}
 .species-card {border:1px solid rgba(22,101,52,.14); border-radius:16px; padding:1rem; height:100%; background:rgba(255,255,255,.55);}
-@media (prefers-color-scheme: dark) {
-    .social-card {background:#0e2017; border-color:#1f6f4a;}
-    .live-status {background:#10291e;border-color:#1f6f4a;}
-    .species-card {background:#10291e;border-color:#1f6f4a;}
+@media (max-width: 720px) {
+    .block-container {padding:.8rem .85rem 2rem !important;}
+    .hero {padding:1.3rem 1.2rem 1.1rem; border-radius:18px; margin-bottom:.9rem;}
+    .hero h1 {font-size:1.8rem;}
+    .hero p {font-size:.92rem;}
+    .hero-tags {gap:.4rem; margin-top:.9rem;}
+    .hero-tag {font-size:.7rem; padding:.32rem .58rem;}
+    [data-testid="stTabs"] [role="tab"] {padding:.6rem .65rem;}
+    iframe[title="st_folium"] {border-radius:12px;}
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important;}
 }
 </style>""", unsafe_allow_html=True)
 
@@ -463,9 +467,15 @@ user, admin = st.session_state.get("user"), st.session_state.get("admin")
 
 # ---------- ESTRUCTURA PRINCIPAL DE PESTAÑAS ----------
 st.markdown(
-    "<div class='hero'><span class='live'>DATOS EN TIEMPO REAL</span>"
+    "<div class='hero'><span class='hero-kicker'>OBSERVATORIO AMBIENTAL · BARRANQUILLA</span>"
     "<h1>SombraBAQ</h1>"
-    "<p>Observatorio climático para Barranquilla · Satélites, comunidad y acción ambiental</p>"
+    "<p>Explora el calor y la vegetación de la ciudad, comparte acciones ambientales "
+    "y encuentra información para decidir con mejores datos.</p>"
+    "<div class='hero-tags'>"
+    "<span class='hero-tag'><span>●</span> Datos satelitales</span>"
+    "<span class='hero-tag'><span>●</span> Clima urbano</span>"
+    "<span class='hero-tag'><span>●</span> Acción ciudadana</span>"
+    "</div>"
     "</div>",
     unsafe_allow_html=True,
 )
@@ -637,36 +647,108 @@ with tabs[":material/map: Mapa inteligente"]:
 
 # --- PESTAÑA 2: REPORTAR ---
 with tabs[":material/camera_alt: Reportar"]:
-    if not user: st.info("Inicia sesión en la barra lateral para registrar reportes ambientales y ganar puntos.")
+    if not user:
+        st.info(
+            "Inicia sesión o crea una cuenta desde la barra lateral para registrar una acción ambiental.",
+            icon=":material/person:",
+        )
     else:
-        st.warning("Protege datos personales: no incluyas rostros, placas, documentos o ubicaciones privadas en la evidencia.", icon=":material/privacy_tip:")
-        st.markdown("### 1. Selecciona la ubicación en el mapa")
-        m2 = folium.Map(location=[10.97, -74.80], zoom_start=12)
-        pin = st.session_state.get("pin")
-        if pin: folium.Marker(pin, icon=folium.Icon(color="green", icon="leaf")).add_to(m2)
-        out = st_folium(m2, height=350, width=None, returned_objects=["last_clicked"])
-        if out and out.get("last_clicked"): pin = st.session_state.pin = [out["last_clicked"]["lat"], out["last_clicked"]["lng"]]
-        st.caption("Haz clic exacto en el mapa donde realizaste la acción." if not pin else f"✅ Ubicación guardada: {pin[0]:.5f}, {pin[1]:.5f}")
+        st.subheader("Comparte una acción ambiental", icon=":material/add_a_photo:")
+        st.caption("Marca dónde ocurrió, agrega una foto y envía el reporte para revisión.")
+        st.warning(
+            "Por privacidad, evita incluir rostros, placas, documentos o ubicaciones privadas en la evidencia.",
+            icon=":material/privacy_tip:",
+        )
 
-        st.markdown("### 2. Evidencia y Validación Automática")
         with st.container(border=True):
+            st.markdown("#### 1. Marca la ubicación")
+            st.caption("Haz clic en el mapa donde realizaste la acción.")
+            m2 = folium.Map(location=[10.97, -74.80], zoom_start=12)
+            pin = st.session_state.get("pin")
+            if pin:
+                folium.Marker(pin, icon=folium.Icon(color="green", icon="leaf")).add_to(m2)
+            out = st_folium(
+                m2,
+                height=390,
+                width=None,
+                returned_objects=["last_clicked"],
+                key="report_location_map",
+            )
+            if out and out.get("last_clicked"):
+                pin = st.session_state.pin = [
+                    out["last_clicked"]["lat"],
+                    out["last_clicked"]["lng"],
+                ]
+            if pin:
+                st.badge("Ubicación seleccionada", icon=":material/location_on:", color="green")
+                st.caption(f"Coordenadas: {pin[0]:.5f}, {pin[1]:.5f}")
+                if st.button("Quitar ubicación", key="clear_report_location", icon=":material/location_off:"):
+                    st.session_state.pin = None
+                    st.rerun()
+            else:
+                st.info("Selecciona un punto en el mapa para continuar.", icon=":material/map:")
+
+        with st.container(border=True):
+            st.markdown("#### 2. Describe y agrega evidencia")
             c1, c2 = st.columns(2)
-            tipo = c1.selectbox("¿Qué acción realizaste?", list(TIPOS), format_func=lambda k: f"{TIPOS[k]} (+{PUNTOS[k]} pts)")
-            nota = c2.text_input("Mensaje para el Muro de la Comunidad (opcional)", max_chars=150)
+            tipo = c1.selectbox(
+                "Tipo de acción",
+                list(TIPOS),
+                format_func=lambda k: f"{TIPOS[k]} · {PUNTOS[k]} puntos",
+            )
+            nota = c2.text_input(
+                "Nota para la comunidad (opcional)",
+                max_chars=150,
+                help="Describe brevemente la acción, sin incluir datos personales.",
+            )
+            foto = st.camera_input(
+                "Toma una foto",
+                help="También puedes seleccionar una imagen desde tu dispositivo.",
+                key="report_camera",
+            )
+            if foto is None:
+                foto = st.file_uploader(
+                    "O selecciona una imagen",
+                    type=["jpg", "jpeg", "png"],
+                    key="report_upload",
+                )
+            if foto is not None:
+                st.image(
+                    foto,
+                    caption="Vista previa de la evidencia",
+                    alt="Vista previa de la foto adjunta al reporte",
+                )
 
-            foto = st.camera_input("Toma la foto de tu aporte en vivo", help="También puedes subir una imagen desde tu galería.") or st.file_uploader("Imagen desde la galería", type=["jpg", "jpeg", "png"])
-
-            if st.button("Analizar foto y publicar", icon=":material/auto_awesome:", type="primary", disabled=foto is None or not pin):
+            if st.button(
+                "Enviar reporte",
+                icon=":material/send:",
+                type="primary",
+                disabled=foto is None or not pin,
+            ):
                 datos = foto.getvalue()
                 datos, error_evidencia = validar_evidencia(datos)
                 if error_evidencia:
                     st.error(error_evidencia)
                     st.stop()
-                with st.spinner("La Inteligencia Artificial está escaneando tu imagen y procesando tus puntos..."):
+                with st.spinner("Analizando la evidencia y guardando el reporte…"):
                     ia = analizar_foto(datos, tipo)
                     ok = ia["metodo"] == "Claude Vision AI" and ia["cumple"] and ia["confianza"] >= 0.75
-                    st.session_state.ia = {**ia, "datos": datos, "tipo": tipo, "pin": pin, "nota": nota, "mime": foto.type or "image/jpeg"}
-                    _publicar(st.session_state.sb, user, st.session_state.ia, ok, zona_cercana, reportes_publicos)
+                    st.session_state.ia = {
+                        **ia,
+                        "datos": datos,
+                        "tipo": tipo,
+                        "pin": pin,
+                        "nota": nota,
+                        "mime": foto.type or "image/jpeg",
+                    }
+                    _publicar(
+                        st.session_state.sb,
+                        user,
+                        st.session_state.ia,
+                        ok,
+                        zona_cercana,
+                        reportes_publicos,
+                    )
 
         if st.session_state.get("ia"):
             ia = st.session_state.ia
