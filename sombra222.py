@@ -367,21 +367,57 @@ def dialogo_registro():
         p1 = st.text_input("Contraseña *", type="password")
         p2 = st.text_input("Repetir Contraseña *", type="password")
         if st.form_submit_button("Registrar Cuenta", type="primary", width="stretch"):
-            if p1 == p2 and len(p1) >= 8:
+            correo = e.strip().lower()
+            if not all([n.strip(), a.strip(), nd.strip(), tl.strip(), correo]):
+                st.error("Completa todos los campos obligatorios.")
+            elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", correo):
+                st.error("Ingresa un correo electrónico válido.")
+            elif p1 != p2 or len(p1) < 8:
+                st.error("Las contraseñas no coinciden o tienen menos de 8 caracteres.")
+            else:
                 try:
-                    r = sb.auth.sign_up({"email": e.strip().lower(), "password": p1, "options": {"data": {"nombre": n.strip().title(), "apellido": a.strip().title(), "telefono": tl, "tipo_doc": td, "num_doc": nd, "zona": z}}})
+                    opciones = {
+                        "data": {
+                            "nombre": n.strip().title(),
+                            "apellido": a.strip().title(),
+                            "telefono": tl.strip(),
+                            "tipo_doc": td,
+                            "num_doc": nd.strip(),
+                            "zona": z,
+                        }
+                    }
+                    try:
+                        site_url = str(st.secrets["app"]["site_url"]).strip()
+                        if site_url:
+                            opciones["email_redirect_to"] = site_url
+                    except Exception:
+                        pass
+                    r = sb.auth.sign_up({
+                        "email": correo,
+                        "password": p1,
+                        "options": opciones,
+                    })
                     if r.session: entrar(sb, e, p1)
-                    else: st.success("Registro exitoso. Revisa tu correo (y spam) para confirmar.")
-                except Exception as ex: st.error(f"Error al registrar: {ex}")
-            else: st.error("Las contraseñas no coinciden o tienen menos de 8 caracteres.")
+                    else:
+                        st.session_state.confirmacion_pendiente = correo
+                        st.success("Registro creado. Revisa tu bandeja de entrada y la carpeta de correo no deseado.")
+                        st.info("El enlace de confirmación puede tardar unos minutos. Si no llega, usa el botón «Reenviar confirmación».")
+                except Exception as ex:
+                    mensaje = str(getattr(ex, "message", None) or ex)
+                    if "email" in mensaje.lower() and ("rate" in mensaje.lower() or "limit" in mensaje.lower()):
+                        st.error("Se enviaron demasiados correos. Espera unos minutos antes de volver a intentar.")
+                    else:
+                        st.error(f"No se pudo crear la cuenta: {mensaje}")
 
-def invitado(sb):
-    try:
-        r = sb.auth.sign_in_anonymously(); st.session_state.user = r.user
-        sb.postgrest.auth(r.session.access_token); st.session_state.admin = False; st.session_state.datos_perfil = {"nombre": "Invitado"}
-        st.rerun()
-    except Exception as ex:
-        st.sidebar.error("Activa «Allow anonymous sign-ins» en Supabase → Authentication → Sign In / Providers." if "anonymous" in str(ex).lower() or "disabled" in str(ex).lower() else f"No se pudo entrar: {ex}")
+    correo_pendiente = st.session_state.get("confirmacion_pendiente")
+    if correo_pendiente:
+        st.caption(f"Correo pendiente de confirmación: {correo_pendiente}")
+        if st.button("Reenviar confirmación", icon=":material/forward_to_inbox:", width="stretch"):
+            try:
+                sb.auth.resend({"type": "signup", "email": correo_pendiente})
+                st.success("Se ha solicitado un nuevo correo de confirmación.")
+            except Exception as ex:
+                st.error(f"No fue posible reenviar el correo: {getattr(ex, 'message', None) or ex}")
 
 def generar_alertas(info, aire, aq):
     out, lm = [], info["LST (°C)"].mean()
@@ -420,7 +456,6 @@ def sidebar():
                 e, p = st.text_input("Correo"), st.text_input("Contraseña", type="password")
                 if st.form_submit_button("Ingresar", type="primary", width="stretch"): entrar(sb, e, p)
             if st.button("Crear cuenta ciudadana", icon=":material/person_add:", width="stretch"): dialogo_registro()
-            if st.button("Entrar como invitado", icon=":material/science:", width="stretch"): invitado(sb)
     return dias
 
 dias = sidebar()
@@ -664,7 +699,7 @@ with tabs[":material/groups: Comunidad"]:
                                     st.session_state.sb.table("publicaciones").insert({"user_id": user.id, "autor": autor, "titulo": tt.strip(), "texto": tx.strip(), "enlace": en.strip() or None, "imagen_path": ruta}).execute()
                                     st.success("¡Publicado!"); time.sleep(1); st.rerun()
                                 except Exception as ex: st.error(f"No se pudo publicar: {ex}")
-            else: st.info("Inicia sesión (o entra como invitado) para publicar.")
+            else: st.info("Inicia sesión para publicar.")
             try: posts = pub().table("publicaciones").select("*").order("created_at", desc=True).limit(15).execute().data
             except Exception: posts = []
             if not posts: st.info("Aún no hay novedades. ¡Publica la primera!")
