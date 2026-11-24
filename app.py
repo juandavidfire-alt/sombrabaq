@@ -2,6 +2,7 @@
 import base64, datetime as dt, hashlib, io, json, math, re, uuid, time
 import folium, pandas as pd, requests, streamlit as st
 from streamlit_folium import st_folium
+from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="SombraBAQ | Observatorio climático", page_icon=":material/park:", layout="wide")
 
@@ -183,8 +184,42 @@ def obtener_saldo(sb, user_id):
     try:
         ganados = sum(r["puntos"] for r in sb.table("reportes").select("puntos").eq("user_id", user_id).eq("estado", "aprobado").execute().data)
         gastados = sum(c["puntos"] for c in sb.table("canjes").select("puntos").eq("user_id", user_id).execute().data)
-        return ganados - gastados, ganados
-    except Exception: return 0, 0
+    except Exception as error:
+        st.error(f"No se pudo consultar el saldo de puntos ({type(error).__name__}).")
+        st.stop()
+
+    try:
+        resultado_eventos = sb.rpc("puntos_eventos_confirmados").execute().data
+        puntos_eventos = int(resultado_eventos or 0)
+    except Exception as error:
+        codigo = getattr(error, "code", None)
+        if codigo not in ("PGRST202", "42883") and "puntos_eventos_confirmados" not in str(error):
+            st.error(f"No se pudieron consultar los puntos de eventos ({type(error).__name__}).")
+            st.stop()
+        if not st.session_state.get("aviso_migracion_eventos"):
+            st.warning("Los puntos por eventos se activarán al aplicar `supabase_events.sql` en Supabase.")
+            st.session_state.aviso_migracion_eventos = True
+        puntos_eventos = 0
+
+    ganados += puntos_eventos
+    return ganados - gastados, ganados
+
+
+def formato_fecha_evento(valor):
+    fecha = dt.datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=dt.timezone.utc)
+    return fecha.astimezone(ZoneInfo("America/Bogota")).strftime("%d %b %Y · %I:%M %p")
+
+
+EVENTOS_SUGERIDOS = [
+    "Jornada de arborización participativa",
+    "Brigada de limpieza de espacio público",
+    "Taller práctico de compostaje",
+    "Caminata de observación de biodiversidad",
+    "Taller de separación de residuos",
+    "Jornada de cuidado de árboles",
+]
 
 # ---------- EXTRACCIÓN DE DATOS SATELITALES Y CLIMA ----------
 @st.cache_resource
@@ -273,23 +308,97 @@ def calidad_aire():
 OBJETIVO = {"siembra": "un árbol o plántula recién sembrada", "mantenimiento": "un árbol siendo cuidado", "residuos": "basura acumulada o escombros"}
 
 def analizar_foto(datos, tipo):
-    from PIL import Image; im = Image.open(io.BytesIO(datos)).convert("RGB"); im.thumbnail((1024, 1024))
-    try: cfg = dict(st.secrets["anthropic"])
-    except Exception: cfg = {}
-    if cfg.get("api_key"):
-        try:
-            import anthropic; buf = io.BytesIO(); im.save(buf, "JPEG", quality=85)
-            texto = ("Verifica si la foto muestra " + OBJETIVO[tipo] + ". Sé estricto, rechaza capturas de pantalla. "
-                     'Responde SOLO un JSON: {"cumple": true|false, "confianza": 0 a 1, "detalle": "frase breve de justificación"}')
-            msg = anthropic.Anthropic(api_key=cfg["api_key"]).messages.create(model=cfg.get("model", "claude-haiku-5-5"), max_tokens=200, messages=[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}}, {"type": "text", "text": texto}]}])
-            j = json.loads(re.search(r"\{.*\}", msg.content[0].text, re.S).group())
-            return {"cumple": bool(j.get("cumple")), "confianza": float(j.get("confianza", 0)), "metodo": "Claude Vision AI", "detalle": j.get("detalle", "")}
-        except Exception: pass
-    
-    import numpy as np; a = np.asarray(im.resize((256, 256)), dtype=float) / 255
-    verde = float(((2 * a[..., 1] - a[..., 0] - a[..., 2]) > 0.08).mean())
-    if tipo == "residuos": return {"cumple": False, "confianza": 0.0, "metodo": "Filtro Demo", "detalle": "El filtro demo de color no procesa basura. Enviado a revisión manual."}
-    return {"cumple": verde >= 0.12, "confianza": min(1.0, verde * 3), "metodo": "Filtro Demo de Vegetación", "detalle": f"Color verde detectado: {verde:.0%} del área."}
+    from PIL import Image
+
+    imagen = Image.open(io.BytesIO(datos)).convert("RGB")
+    imagen.thumbnail((1280, 1280))
+    try:
+        cfg = dict(st.secrets["anthropic"])
+    except (KeyError, FileNotFoundError):
+        cfg = {}
+    if not cfg.get("api_key"):
+        return {
+            "cumple": False,
+            "confianza": 0.0,
+            "metodo": "Revisión manual",
+            "detalle": "El servicio de visión no está configurado; no se usó un filtro de color.",
+        }
+
+    try:
+        import anthropic
+
+        buffer = io.BytesIO()
+        imagen.save(buffer, "JPEG", quality=90)
+        objetivo = OBJETIVO[tipo]
+        criterio = (
+            "Para una plantación, busca una plántula o árbol joven claramente colocado en tierra, "
+            "con el tallo y el punto de plantación visibles. No cuentes árboles adultos ya establecidos, "
+            "césped, hojas, viveros, plantas en maceta, imágenes de pantalla ni vegetación de fondo como "
+            "prueba de una plantación reciente. Si el encuadre no muestra señales suficientes, marca "
+            "cumple=false y baja confianza. Una foto nunca demuestra quién sembró, cuándo ocurrió ni "
+            "si el lugar tiene permisos. "
+            if tipo == "siembra"
+            else "Evalúa solo lo visible en la imagen. Si el objetivo no aparece claramente o la evidencia "
+            "es ambigua, marca cumple=false y baja confianza. "
+        )
+        prompt = (
+            f"Evalúa si la imagen aporta evidencia visual de {objetivo}. {criterio}"
+            "No infieras hechos fuera del encuadre. Responde exclusivamente con un objeto JSON válido "
+            'con este esquema: {"cumple": boolean, "confianza": number entre 0 y 1, '
+            '"detalle": "descripción breve de elementos visibles y limitaciones"}. '
+            "La confianza representa únicamente la claridad visual, no la autenticidad, fecha, ubicación "
+            "ni realización de la acción."
+        )
+        respuesta = anthropic.Anthropic(api_key=cfg["api_key"]).messages.create(
+            model=cfg.get("model", "claude-haiku-5-5"),
+            max_tokens=250,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": base64.b64encode(buffer.getvalue()).decode(),
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        texto = "\n".join(
+            bloque.text for bloque in respuesta.content if getattr(bloque, "type", None) == "text"
+        )
+        coincidencia = re.search(r"\{.*\}", texto, re.S)
+        if not coincidencia:
+            raise ValueError("La respuesta del servicio no contiene JSON.")
+        resultado = json.loads(coincidencia.group())
+        cumple = resultado.get("cumple")
+        confianza = resultado.get("confianza")
+        detalle = resultado.get("detalle")
+        if (
+            not isinstance(cumple, bool)
+            or isinstance(confianza, bool)
+            or not isinstance(confianza, (int, float))
+            or not math.isfinite(confianza)
+            or not 0 <= confianza <= 1
+            or not isinstance(detalle, str)
+        ):
+            raise ValueError("La respuesta del servicio no cumple el formato esperado.")
+        return {
+            "cumple": cumple,
+            "confianza": float(confianza),
+            "metodo": "Claude Vision · orientativo",
+            "detalle": detalle.strip()[:400],
+        }
+    except Exception as error:
+        return {
+            "cumple": False,
+            "confianza": 0.0,
+            "metodo": "Revisión manual",
+            "detalle": f"El análisis visual no se pudo validar ({type(error).__name__}); no se otorgará una aprobación automática.",
+        }
 
 def validar_evidencia(datos):
     if len(datos) > 8 * 1024 * 1024:
@@ -307,7 +416,7 @@ def validar_evidencia(datos):
     except Exception:
         return None, "El archivo no contiene una imagen valida."
 
-def _publicar(sb, user, ia, ok, zona_cercana, reportes_publicos):
+def _publicar(sb, user, ia, zona_cercana, reportes_publicos):
     try:
         hash_foto = hashlib.sha256(ia["datos"]).hexdigest()
         duplicados = sb.table("reportes").select("id").eq("foto_hash", hash_foto).limit(1).execute().data
@@ -316,21 +425,18 @@ def _publicar(sb, user, ia, ok, zona_cercana, reportes_publicos):
             return
         ruta = f"{user.id}/{uuid.uuid4().hex}.jpg"
         sb.storage.from_("evidencias").upload(ruta, ia["datos"], {"content-type": ia["mime"]})
-        estado_final = "aprobado" if ok else "pendiente"
-        
+        sugerencia_ia = "compatible con el objetivo visual" if ia["cumple"] else "insuficiente o no concluyente"
         sb.table("reportes").insert({
             "user_id": user.id, "tipo": ia["tipo"], "lat": ia["pin"][0], "lng": ia["pin"][1], 
             "zona": zona_cercana(*ia["pin"]), "nota": ia["nota"], "foto_path": ruta, 
-            "estado": estado_final, "puntos": PUNTOS[ia["tipo"]], "ia_confianza": ia["confianza"],
-            "ia_detalle": f"[{ia['metodo']}] {ia['detalle']}"[:500], "foto_hash": hash_foto
+            "estado": "pendiente", "puntos": PUNTOS[ia["tipo"]], "ia_confianza": ia["confianza"],
+            "ia_detalle": f"[{ia['metodo']}] Evidencia {sugerencia_ia}; {ia['detalle']}"[:500],
+            "foto_hash": hash_foto
         }).execute()
         
         st.session_state.pop("ia", None); st.session_state.pin = None; reportes_publicos.clear()
-        if ok:
-            st.success(f"¡Validación automática exitosa! Has ganado **{PUNTOS[ia['tipo']]} puntos**. 🌍✨")
-            st.balloons()
-        else: 
-            st.info("La plataforma no pudo validar la imagen automáticamente. Ha sido enviada a moderación manual.")
+        st.success("Reporte enviado a revisión humana. Los puntos se sumarán al saldo solo si la evidencia es aprobada.")
+        st.caption(f"Orientación visual ({ia['metodo']}): confianza {ia['confianza']:.0%}. {ia['detalle']}")
         
         # ACTUALIZACIÓN EN TIEMPO REAL: Pausamos 2.5 segs para que el usuario lea, y recargamos para actualizar puntos
         time.sleep(2.5)
@@ -344,7 +450,9 @@ def entrar(sb, email, password):
     try:
         r = sb.auth.sign_in_with_password({"email": email, "password": password})
         st.session_state.user = r.user; sb.postgrest.auth(r.session.access_token)
-        st.session_state.admin = bool(sb.table("admins").select("user_id").execute().data)
+        st.session_state.admin = bool(
+            sb.table("admins").select("user_id").eq("user_id", r.user.id).limit(1).execute().data
+        )
         pr = sb.table("perfiles").select("*").eq("user_id", r.user.id).execute().data
         st.session_state.datos_perfil = pr[0] if pr else {}
         st.rerun()
@@ -367,19 +475,82 @@ def dialogo_registro():
         p1 = st.text_input("Contraseña *", type="password")
         p2 = st.text_input("Repetir Contraseña *", type="password")
         if st.form_submit_button("Registrar Cuenta", type="primary", width="stretch"):
-            if p1 == p2 and len(p1) >= 8:
+            correo = e.strip().lower()
+            if not all([n.strip(), a.strip(), nd.strip(), tl.strip(), correo]):
+                st.error("Completa todos los campos obligatorios.")
+            elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", correo):
+                st.error("Ingresa un correo electrónico válido.")
+            elif p1 != p2 or len(p1) < 8:
+                st.error("Las contraseñas no coinciden o tienen menos de 8 caracteres.")
+            else:
                 try:
-                    r = sb.auth.sign_up({"email": e.strip().lower(), "password": p1, "options": {"data": {"nombre": n.strip().title(), "apellido": a.strip().title(), "telefono": tl, "tipo_doc": td, "num_doc": nd, "zona": z}}})
-                    if r.session: entrar(sb, e, p1)
-                    else: st.success("Registro exitoso. Revisa tu correo (y spam) para confirmar.")
-                except Exception as ex: st.error(f"Error al registrar: {ex}")
-            else: st.error("Las contraseñas no coinciden o tienen menos de 8 caracteres.")
+                    r = sb.auth.sign_up({
+                        "email": correo,
+                        "password": p1,
+                        "options": {
+                            "data": {
+                                "nombre": n.strip().title(),
+                                "apellido": a.strip().title(),
+                                "telefono": tl.strip(),
+                                "tipo_doc": td,
+                                "num_doc": nd.strip(),
+                                "zona": z,
+                            }
+                        },
+                    })
+                    if r.session:
+                        st.session_state.pop("confirmacion_pendiente", None)
+                        entrar(sb, correo, p1)
+                    else:
+                        st.session_state.confirmacion_pendiente = correo
+                        st.success("La solicitud de registro fue aceptada por Supabase.")
+                        st.info(
+                            "Si la confirmación por correo está activada, revisa tu bandeja de entrada y spam. "
+                            "La entrega depende de la configuración de correo SMTP del proyecto."
+                        )
+                except Exception as ex:
+                    mensaje = str(getattr(ex, "message", None) or ex)
+                    mensaje_lower = mensaje.lower()
+                    if "rate" in mensaje_lower or "limit" in mensaje_lower:
+                        st.error("Se alcanzó el límite de correos de autenticación. Espera antes de volver a intentarlo.")
+                    elif "smtp" in mensaje_lower or "email provider" in mensaje_lower:
+                        st.error(
+                            "Supabase no pudo enviar el correo. Revisa la configuración SMTP y el proveedor Email en Authentication."
+                        )
+                    else:
+                        st.error(f"No se pudo crear la cuenta: {mensaje}")
+
+    correo_pendiente = st.session_state.get("confirmacion_pendiente")
+    if correo_pendiente:
+        st.caption(f"Correo pendiente de confirmación: {correo_pendiente}")
+        if st.button(
+            "Reenviar confirmación",
+            icon=":material/forward_to_inbox:",
+            width="stretch",
+            key="reenviar_confirmacion",
+        ):
+            try:
+                sb.auth.resend({"type": "signup", "email": correo_pendiente})
+                st.success(
+                    "Supabase aceptó la solicitud de reenvío. La entrega puede tardar unos minutos; revisa también spam."
+                )
+            except Exception as ex:
+                mensaje = str(getattr(ex, "message", None) or ex)
+                mensaje_lower = mensaje.lower()
+                if "rate" in mensaje_lower or "limit" in mensaje_lower:
+                    st.error("Se alcanzó el límite de reenvíos. Espera antes de volver a intentarlo.")
+                elif "smtp" in mensaje_lower or "email provider" in mensaje_lower:
+                    st.error(
+                        "Supabase no pudo enviar el correo. Revisa la configuración SMTP y el proveedor Email en Authentication."
+                    )
+                else:
+                    st.error(f"No fue posible reenviar la confirmación: {mensaje}")
 
 def generar_alertas(info, aire, aq):
     out, lm = [], info["LST (°C)"].mean()
     for z, r in info.iterrows():
         n, l = r["NDVI"], r["LST (°C)"]
-        if pd.notna(n) and n < 0.30: out.append((3 if n < 0.2 else 2, "🌱 Plantar", z, f"NDVI {n:.2f}: poca vegetación.", "Priorizar árboles de sombra nativos o adaptados y corredores verdes. Confirmar especies y permisos con la autoridad ambiental local."))
+        if pd.notna(n) and n < 0.30: out.append((3 if n < 0.2 else 2, "Baja cobertura vegetal", z, f"NDVI {n:.2f}: señal satelital de baja cobertura vegetal.", "Verificar el terreno en campo; el NDVI no confirma que el lugar sea apto para sembrar."))
         if pd.notna(l) and l - lm >= 1.5: out.append((3 if l - lm >= 3 else 2, "🔥 Isla de calor", z, f"Superficie {l:.1f} °C ({l - lm:+.1f} °C vs. ciudad).", "Más sombra en calles, paraderos y escuelas; techos y fachadas verdes o reflectantes."))
     if aire is not None:
         for z, r in aire.iterrows():
@@ -394,7 +565,8 @@ def sidebar():
     st.sidebar.markdown("### :material/park: SombraBAQ")
     st.sidebar.caption("Observatorio ambiental")
     with st.sidebar.container(border=True):
-        st.markdown("**Configuración del análisis**")
+        st.markdown("**Filtros del mapa**")
+        zona_foco = st.selectbox("Zona", ["Todas", *ZONAS], key="map_zone_focus")
         dias = st.slider("Ventana satelital", 20, 120, 60, 10, help="Periodo usado para combinar imágenes satelitales.")
     _, supabase_key = cfg()
     if not supabase_key:
@@ -402,7 +574,7 @@ def sidebar():
             "La autenticación y las funciones de comunidad requieren configurar Supabase en los secretos de Streamlit Cloud.",
             title="Supabase pendiente de configuración",
         )
-        return dias
+        return dias, zona_foco
 
     sb = sb_client()
     
@@ -420,9 +592,9 @@ def sidebar():
                 e, p = st.text_input("Correo"), st.text_input("Contraseña", type="password")
                 if st.form_submit_button("Ingresar", type="primary", width="stretch"): entrar(sb, e, p)
             if st.button("Crear cuenta ciudadana", icon=":material/person_add:", width="stretch"): dialogo_registro()
-    return dias
+    return dias, zona_foco
 
-dias = sidebar()
+dias, zona_foco = sidebar()
 user, admin = st.session_state.get("user"), st.session_state.get("admin")
 
 # ---------- ESTRUCTURA PRINCIPAL DE PESTAÑAS ----------
@@ -569,25 +741,41 @@ with tabs[":material/map: Mapa inteligente"]:
                 f"🌿 Vegetación (NDVI): {n:.2f}" if pd.notna(n) else ""
             ])
             zd[z] = (lat, lng, txt, col, peso, det)
-        peor = max(zd, key=lambda k: zd[k][4]) if zd else None
+        zonas_mapa = zd if zona_foco == "Todas" else {zona_foco: zd[zona_foco]}
+        peor = max(zonas_mapa, key=lambda k: zonas_mapa[k][4]) if zonas_mapa else None
 
         mapa_col, panel_col = st.columns([3, 1.1])
         with mapa_col:
             from folium.plugins import Fullscreen
-            m = folium.Map(location=[10.97, -74.80], zoom_start=12, min_zoom=11, max_zoom=18, tiles=None, prefer_canvas=True, max_bounds=True)
-            m.get_root().html.add_child(folium.Element("<style>@keyframes pulso{0%{box-shadow:0 0 0 0 rgba(239,68,68,.75)}100%{box-shadow:0 0 0 24px rgba(239,68,68,0)}}.pulso{animation:pulso 1.6s infinite}.arbol{filter:drop-shadow(0 2px 2px rgba(0,0,0,.6));transition:transform .15s}.arbol:hover{transform:scale(1.8)}</style>"))
+            centro_mapa = ZONAS.get(zona_foco, (10.97, -74.80))
+            m = folium.Map(location=centro_mapa, zoom_start=14 if zona_foco != "Todas" else 12, min_zoom=11, max_zoom=18, tiles=None, prefer_canvas=True, max_bounds=True)
+            m.get_root().html.add_child(folium.Element("<style>@keyframes pulso{0%{box-shadow:0 0 0 0 rgba(239,68,68,.75)}100%{box-shadow:0 0 0 24px rgba(239,68,68,0)}}.pulso{animation:pulso 1.6s infinite}</style>"))
             for i_, (nb, (ub, nz)) in enumerate(BASES.items()): folium.TileLayer(ub, attr="Esri/OSM", name=nb, show=(i_ == 0), max_native_zoom=nz, max_zoom=19).add_to(m)
             if capa in tiles: folium.TileLayer(tiles[capa], attr="Google Earth Engine", name=capa, opacity=0.8, overlay=True).add_to(m)
             
             if ver_ico and capa == "NDVI":
-                for la, lo, v in meta.get("arboles", []): folium.Marker([la, lo], tooltip=f"Muestra verde: NDVI {v:.2f}", icon=folium.DivIcon(icon_size=(26, 26), icon_anchor=(13, 13), html=f'<div class="arbol" style="font-size:{13 + int((v - 0.5) * 40)}px">🌳</div>')).add_to(m)
+                for la, lo, v in meta.get("arboles", []):
+                    if zona_foco != "Todas" and zona_cercana(la, lo) != zona_foco: continue
+                    folium.CircleMarker(
+                        [la, lo],
+                        radius=4,
+                        color="#f0fdf4",
+                        weight=1.5,
+                        fill=True,
+                        fill_color="#166534",
+                        fill_opacity=0.95,
+                        tooltip=f"Muestra satelital con NDVI alto ({v:.2f}); no confirma un árbol individual",
+                    ).add_to(m)
             if ver_ico and capa in ("NDVI", "LST"):
                 for i_p, (la, lo, v, tl) in enumerate(meta.get("plantar", []), 1):
-                    folium.Marker([la, lo], tooltip=f"Plantar #{i_p}: NDVI {v:.2f}, superficie {tl:.0f} °C", icon=folium.DivIcon(icon_size=(22, 22), icon_anchor=(11, 11), html=f'<div class="pulso" style="width:22px;height:22px;border-radius:50%;background:#facc15;border:2px solid #fff;color:#1a1a1a;font:700 11px system-ui;text-align:center;line-height:18px">{i_p}</div>')).add_to(m)
+                    if zona_foco != "Todas" and zona_cercana(la, lo) != zona_foco: continue
+                    folium.Marker([la, lo], tooltip=f"Punto de revisión #{i_p}: NDVI {v:.2f}, superficie {tl:.0f} °C", icon=folium.DivIcon(icon_size=(22, 22), icon_anchor=(11, 11), html=f'<div class="pulso" style="width:22px;height:22px;border-radius:50%;background:#facc15;border:2px solid #fff;color:#1a1a1a;font:700 11px system-ui;text-align:center;line-height:18px">{i_p}</div>')).add_to(m)
             if ver_ico and capa == "LST":
-                for la, lo, v in meta.get("calientes", []): folium.Marker([la, lo], tooltip=f"Foco de calor: {v:.1f} °C", icon=folium.DivIcon(icon_size=(14, 14), html='<div class="pulso" style="width:12px;height:12px;border-radius:50%;background:#ef4444;border:2px solid #fff"></div>')).add_to(m)
+                for la, lo, v in meta.get("calientes", []):
+                    if zona_foco != "Todas" and zona_cercana(la, lo) != zona_foco: continue
+                    folium.Marker([la, lo], tooltip=f"Muestra de superficie: {v:.1f} °C", icon=folium.DivIcon(icon_size=(14, 14), html='<div class="pulso" style="width:12px;height:12px;border-radius:50%;background:#ef4444;border:2px solid #fff"></div>')).add_to(m)
             
-            for z, (lat, lng, txt, col, peso, det) in zd.items():
+            for z, (lat, lng, txt, col, peso, det) in zonas_mapa.items():
                 folium.Circle([lat, lng], RADIO_M, color=col, weight=2, fill=True, fill_color=col, fill_opacity=0.3 if capa in ("AIRE", "AQI") else 0.08).add_to(m)
                 cls = "pulso" if z == peor else ""
                 badge = f'<div class="{cls}" style="background:{col};color:#0b1a14;font:700 15px Inter,system-ui;padding:4px 12px;border-radius:14px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.5);text-align:center;white-space:nowrap">{txt}<div style="font:600 9px system-ui">{z}</div></div>'
@@ -595,18 +783,42 @@ with tabs[":material/map: Mapa inteligente"]:
             
             if ver_rep:
                 try:
-                    for _, r in reportes_publicos().iterrows(): folium.CircleMarker([r["lat"], r["lng"]], radius=6.5, color="#fff", weight=1.5, fill=True, fill_color="#ef4444" if r["tipo"] == "residuos" else "#22c55e", fill_opacity=1, tooltip=TIPOS.get(r["tipo"])).add_to(m)
+                    for _, r in reportes_publicos().iterrows():
+                        if zona_foco != "Todas" and r["zona"] != zona_foco: continue
+                        folium.CircleMarker([r["lat"], r["lng"]], radius=6.5, color="#fff", weight=1.5, fill=True, fill_color="#ef4444" if r["tipo"] == "residuos" else "#22c55e", fill_opacity=1, tooltip=TIPOS.get(r["tipo"])).add_to(m)
                 except: pass
                 
             folium.LayerControl(collapsed=True).add_to(m); Fullscreen().add_to(m)
             st_folium(m, height=600, width=None, returned_objects=[])
+            leyenda_mapa = {
+                "AIRE": ("Círculos por zona · Temperatura del aire (°C)", "Menor temperatura", "Mayor temperatura", "Open-Meteo · condición actual estimada; no es una medición en sitio."),
+                "AQI": ("Círculos por zona · Calidad del aire (US AQI)", "Mejor calidad", "Peor calidad", "Open-Meteo · estimación de modelo; no equivale a una estación local."),
+                "LST": ("Círculos por zona · Temperatura de superficie (°C)", "Menor temperatura", "Mayor temperatura", f"Resumen por zona de Landsat 8/9, últimos {dias} días, escala de análisis de 30 m. El ráster usa una paleta independiente."),
+                "NDVI": ("Círculos por zona · Índice de vegetación (NDVI)", "NDVI alto · más vegetación", "NDVI bajo · menos vegetación", f"Resumen por zona de Sentinel-2, últimos {dias} días. El ráster usa tonos propios: marrón para NDVI bajo y verde para NDVI alto."),
+            }
+            titulo_leyenda, extremo_izq, extremo_der, nota_leyenda = leyenda_mapa[capa]
+            st.markdown(f"**{titulo_leyenda}**")
             st.markdown('<div class="leyenda"></div>', unsafe_allow_html=True)
-            st.caption("Barra de escala: Verde (Óptimo) a Rojo (Crítico). La zona palpitante requiere atención prioritaria.")
+            leyenda_izq, leyenda_der = st.columns(2)
+            leyenda_izq.caption(extremo_izq)
+            leyenda_der.caption(extremo_der, text_alignment="right")
+            st.caption(nota_leyenda)
+            if capa in ("LST", "NDVI"):
+                cuenta_escenas = meta.get("escenas_landsat" if capa == "LST" else "escenas_s2", 0)
+                st.caption(f"Escenas disponibles en el periodo: {cuenta_escenas} · Vista: {zona_foco.lower() if zona_foco != 'Todas' else 'toda la ciudad'}.")
+            else:
+                st.caption(f"Vista: {zona_foco.lower() if zona_foco != 'Todas' else 'toda la ciudad'}.")
+            if capa == "NDVI" and ver_ico:
+                st.caption("Puntos verdes discretos: muestras con señal de vegetación alta; no son un inventario de árboles.")
 
         with panel_col:
             with st.container(border=True):
-                st.markdown("**Comparativa Local**")
-                z = st.selectbox("Zona a inspeccionar", list(ZONAS), label_visibility="collapsed")
+                st.markdown("**Comparativa local**")
+                if zona_foco == "Todas":
+                    z = st.selectbox("Zona a inspeccionar", list(ZONAS), key="map_comparison_zone")
+                else:
+                    z = zona_foco
+                    st.caption(f"Zona enfocada: {z}")
                 if aire is not None:
                     st.metric("Temperatura del Aire", f"{aire.loc[z,'Temp (°C)']:.1f} °C", f"{aire.loc[z,'Temp (°C)']-aire['Temp (°C)'].mean():+.1f} °C vs media ciudad", delta_color="inverse")
                 if pd.notna(info.loc[z, "LST (°C)"]): st.metric("Superficie LST", f"{info.loc[z,'LST (°C)']:.1f} °C", f"{info.loc[z,'LST (°C)']-info['LST (°C)'].mean():+.1f} °C vs ciudad", delta_color="inverse")
@@ -617,18 +829,23 @@ with tabs[":material/map: Mapa inteligente"]:
             st.bar_chart(t.set_index("Zona")["LST (°C)"].sort_values(ascending=False), color="#ef4444", height=200)
 
         al = generar_alertas(info, aire, aq)
-        st.markdown("### 🚨 Alertas y plan de siembra")
+        if zona_foco != "Todas":
+            al = [alerta for alerta in al if alerta[2] == zona_foco]
+        st.markdown("### Alertas ambientales")
         if not al: st.success("Sin alertas activas con los datos actuales.")
         for nv, tit, z, dato, accion in al[:8]:
             col = {3: "#ef4444", 2: "#f59e0b"}[nv]
-            st.markdown(f"<div style='border-left:6px solid {col};background:rgba(127,127,127,.08);padding:.7rem 1rem;border-radius:10px;margin:.4rem 0'><b>{tit} · {z}</b> <span style='opacity:.7'>({'Crítica' if nv == 3 else 'Alta'})</span><br>{dato}<br><i>{accion}</i></div>", unsafe_allow_html=True)
-        pl = meta.get("plantar", [])
+            st.markdown(f"<div style='border-left:6px solid {col};background:rgba(127,127,127,.08);padding:.7rem 1rem;border-radius:10px;margin:.4rem 0'><b>{tit} · {z}</b><br>{dato}<br><i>{accion}</i></div>", unsafe_allow_html=True)
+        pl = [
+            punto for punto in meta.get("plantar", [])
+            if zona_foco == "Todas" or zona_cercana(punto[0], punto[1]) == zona_foco
+        ]
         if pl:
-            dfp = pd.DataFrame([{"Prioridad": i + 1, "Zona": zona_cercana(la, lo), "NDVI": round(v, 2), "Superficie (°C)": round(tl, 1), "Mapa": f"https://www.google.com/maps?q={la:.5f},{lo:.5f}"} for i, (la, lo, v, tl) in enumerate(pl)])
-            st.markdown("**📍 Sitios prioritarios para plantar** (vegetación muy baja y superficie caliente; los números amarillos del mapa)")
+            dfp = pd.DataFrame([{"Punto": i + 1, "Zona de revisión": zona_cercana(la, lo), "NDVI": round(v, 2), "Superficie (°C)": round(tl, 1), "Mapa": f"https://www.google.com/maps?q={la:.5f},{lo:.5f}"} for i, (la, lo, v, tl) in enumerate(pl)])
+            st.markdown("**Puntos candidatos para revisión en campo**")
             st.dataframe(dfp, hide_index=True, width="stretch", column_config={"Mapa": st.column_config.LinkColumn("Ubicación", display_text="Abrir en Google Maps")})
-            st.caption("Son puntos muestreados por satélite (30 m): pueden ser suelo desnudo, techos o vías. Verifica en campo y coordina con la autoridad ambiental antes de sembrar.")
-            st.download_button("⬇️ Descargar plan de siembra (CSV)", dfp.to_csv(index=False), "plan_siembra_sombrabaq.csv", "text/csv")
+            st.caption("Se generan a partir de muestras satelitales a escala de 120 m con NDVI bajo y temperatura superficial alta. Pueden corresponder a suelo desnudo, techos o vías; no indican por sí solas que el sitio sea apto para sembrar. Verifica en campo y coordina con la autoridad ambiental.")
+            st.download_button("Descargar puntos de revisión (CSV)", dfp.to_csv(index=False), "puntos_revision_sombrabaq.csv", "text/csv", icon=":material/download:")
     else:
         st.info(
             "La capa satelital no está disponible por ahora. Se muestra el mapa de Barranquilla "
@@ -829,7 +1046,6 @@ with tabs[":material/camera_alt: Reportar"]:
                 else:
                     with st.spinner("Analizando la evidencia y guardando el reporte…"):
                         ia = analizar_foto(datos, tipo)
-                        ok = ia["cumple"] and ia["confianza"] >= 0.5
                         st.session_state.ia = {
                             **ia,
                             "datos": datos,
@@ -842,14 +1058,14 @@ with tabs[":material/camera_alt: Reportar"]:
                             st.session_state.sb,
                             user,
                             st.session_state.ia,
-                            ok,
                             zona_cercana,
                             reportes_publicos,
                         )
         
         if st.session_state.get("ia"):
             ia = st.session_state.ia
-            st.markdown(f"**Análisis de la IA:** {ia['metodo']} detectó un nivel de confianza del `{ia['confianza']:.0%}`. *{ia['detalle']}*")
+            st.markdown(f"**Orientación visual:** {ia['metodo']} · confianza `{ia['confianza']:.0%}`. *{ia['detalle']}*")
+            st.caption("El modelo no verifica fecha, ubicación, autoría ni que la siembra haya ocurrido. Ningún análisis automático aprueba reportes ni otorga puntos.")
 
 # --- PESTAÑA 3: COMUNIDAD ---
 with tabs[":material/groups: Comunidad"]:
@@ -901,16 +1117,160 @@ with tabs[":material/groups: Comunidad"]:
                     try: st.image(st.session_state.sb.storage.from_("evidencias").create_signed_url(post["foto_path"], 600)["signedURL"], width=320)
                     except Exception: pass
     with c2:
-        st.subheader("Próximas actividades")
-        with st.container(border=True):
-            st.markdown("**Brigada de limpieza: Parque Suri Salcedo**")
-            st.caption("Programación comunitaria · Próximamente")
-            st.button("Inscripciones abiertas pronto", key="b1", width="stretch", disabled=True)
-        with st.container(border=True):
-            st.markdown("**Siembra masiva: Bulevar de Buenavista**")
-            st.caption("Programación comunitaria · Próximamente")
-            st.button("Inscripciones abiertas pronto", key="b2", width="stretch", disabled=True)
-        st.caption("Las actividades se habilitarán cuando exista una convocatoria confirmada.")
+        st.subheader("Próximos eventos")
+        st.caption("Inscríbete y registra tu llegada con el equipo organizador. Los puntos se acreditan solo al confirmar tu asistencia.")
+        with st.expander("Proponer y publicar un evento", expanded=not user):
+            st.caption("Las publicaciones son públicas e inmediatas. Cada cuenta autenticada puede publicar hasta 3 eventos en 24 horas; el organizador no puede verificar su propia asistencia.")
+            if not user:
+                st.info("Inicia sesión para proponer un evento.")
+            else:
+                with st.form("crear_evento_comunitario"):
+                    titulo_propuesta = st.text_input("Título del evento", max_chars=120)
+                    tema_columnas = st.columns(2)
+                    tema_propuesta = tema_columnas[0].text_input("Tema", max_chars=100)
+                    dirigido_propuesta = tema_columnas[1].text_input("¿Para quién está dirigido?", max_chars=120)
+                    descripcion_propuesta = st.text_area(
+                        "¿De qué se trata? Incluye qué harán las personas",
+                        max_chars=1200,
+                    )
+                    lugar_propuesta = st.text_input("Lugar real de encuentro", max_chars=200)
+                    fecha_columnas_propuesta = st.columns(2)
+                    fecha_propuesta = fecha_columnas_propuesta[0].date_input(
+                        "Fecha",
+                        value=dt.date.today() + dt.timedelta(days=7),
+                        min_value=dt.date.today(),
+                        key="community_event_date",
+                    )
+                    hora_propuesta = fecha_columnas_propuesta[1].time_input(
+                        "Hora local",
+                        value=dt.time(9, 0),
+                        key="community_event_time",
+                    )
+                    cupos_propuesta = st.number_input(
+                        "Cupos",
+                        min_value=1,
+                        max_value=500,
+                        value=20,
+                        step=1,
+                        key="community_event_capacity",
+                    )
+                    st.caption("Los eventos comunitarios reciben 10 puntos al confirmar asistencia. Los ejemplos DEMO no acreditan puntos.")
+                    if st.form_submit_button("Publicar evento", type="primary", icon=":material/campaign:"):
+                        fecha_local_propuesta = dt.datetime.combine(
+                            fecha_propuesta,
+                            hora_propuesta,
+                            tzinfo=ZoneInfo("America/Bogota"),
+                        )
+                        if (
+                            len(titulo_propuesta.strip()) < 5
+                            or len(tema_propuesta.strip()) < 3
+                            or len(dirigido_propuesta.strip()) < 3
+                            or len(descripcion_propuesta.strip()) < 10
+                            or len(lugar_propuesta.strip()) < 3
+                        ):
+                            st.error("Completa el título, tema, público, descripción y lugar.")
+                        elif fecha_local_propuesta <= dt.datetime.now(ZoneInfo("America/Bogota")):
+                            st.error("La fecha y hora del evento deben ser futuras.")
+                        else:
+                            try:
+                                st.session_state.sb.rpc(
+                                    "crear_evento_usuario",
+                                    {
+                                        "p_titulo": titulo_propuesta.strip(),
+                                        "p_tema": tema_propuesta.strip(),
+                                        "p_dirigido_a": dirigido_propuesta.strip(),
+                                        "p_descripcion": descripcion_propuesta.strip(),
+                                        "p_lugar": lugar_propuesta.strip(),
+                                        "p_fecha": fecha_local_propuesta.isoformat(),
+                                        "p_cupos": int(cupos_propuesta),
+                                    },
+                                ).execute()
+                                st.success("Evento publicado y visible para la comunidad.")
+                                st.rerun()
+                            except Exception as error:
+                                st.error(
+                                    f"No se pudo publicar el evento: "
+                                    f"{getattr(error, 'message', None) or type(error).__name__}"
+                                )
+        eventos_disponibles = True
+        try:
+            eventos = (
+                pub().table("eventos_comunitarios")
+                .select("id,titulo,tema,dirigido_a,descripcion,lugar,fecha,puntos,cupos,es_demo")
+                .eq("estado", "publicado")
+                .gte("fecha", dt.datetime.now(dt.timezone.utc).isoformat())
+                .order("fecha")
+                .limit(20)
+                .execute()
+                .data
+            )
+            mis_asistencias = {}
+            if user:
+                registros = (
+                    st.session_state.sb.table("asistencias_eventos")
+                    .select("evento_id,estado")
+                    .eq("usuario_id", user.id)
+                    .execute()
+                    .data
+                )
+                mis_asistencias = {registro["evento_id"]: registro["estado"] for registro in registros}
+        except Exception as error:
+            eventos = []
+            eventos_disponibles = False
+            codigo_error = getattr(error, "code", None)
+            detalle_error = str(error).lower()
+            tabla_faltante = next(
+                (tabla for tabla in ("eventos_comunitarios", "asistencias_eventos") if tabla in detalle_error),
+                None,
+            )
+            if codigo_error in ("PGRST205", "42P01"):
+                tabla = tabla_faltante or "eventos_comunitarios"
+                st.error(f"Supabase no encuentra `{tabla}` en su esquema API. Ejecuta `supabase_events.sql`; si ya lo aplicaste, recarga el esquema con `NOTIFY pgrst, 'reload schema';`.")
+                st.caption(f"Código de Supabase: {codigo_error}.")
+            elif codigo_error in ("PGRST204", "42703"):
+                st.error("El esquema de eventos no está actualizado. Ejecuta `supabase_eventos_comunidad.sql` después de `supabase_events.sql`; si ya lo hiciste, recarga el esquema de Supabase.")
+                st.caption(f"Diagnóstico: {codigo_error}")
+            elif codigo_error in ("42501", "PGRST301"):
+                st.error("Supabase rechazó la consulta de eventos. Revisa los permisos y las políticas RLS de `supabase_events.sql`.")
+                st.caption(f"Diagnóstico: {codigo_error}")
+            else:
+                st.error("No se pudieron cargar los eventos. Revisa la conexión, el esquema y los permisos de Supabase.")
+                st.caption(f"Diagnóstico: {codigo_error or type(error).__name__}")
+
+        if eventos_disponibles and not eventos:
+            st.info("Aún no hay convocatorias publicadas. El equipo administrador puede crear eventos desde Moderación.")
+        for evento in eventos:
+            with st.container(border=True):
+                if evento.get("es_demo"):
+                    st.badge("DEMO · No es un evento real · No asistir", icon=":material/science:", color="orange")
+                st.subheader(evento["titulo"])
+                st.caption(f"{formato_fecha_evento(evento['fecha'])} · {evento['lugar']}")
+                st.caption(f"Tema: {evento['tema']} · Dirigido a: {evento['dirigido_a']}")
+                st.write(evento["descripcion"])
+                if evento.get("es_demo"):
+                    st.badge("Solo demostración · sin puntos", icon=":material/loyalty:", color="gray")
+                else:
+                    st.badge(f"{evento['puntos']} puntos al confirmar asistencia", icon=":material/loyalty:", color="green")
+                st.caption(f"Cupos máximos: {evento['cupos']}")
+                estado_asistencia = mis_asistencias.get(evento["id"])
+                if estado_asistencia == "pendiente":
+                    st.badge("Inscripción pendiente de asistencia", icon=":material/schedule:", color="orange")
+                elif estado_asistencia == "confirmada":
+                    st.success(f"Asistencia confirmada · {evento['puntos']} puntos incluidos en tu saldo.")
+                elif estado_asistencia == "rechazada":
+                    st.badge("Asistencia no confirmada", icon=":material/cancel:", color="red")
+                elif not user:
+                    st.info("Inicia sesión para inscribirte.")
+                elif st.button("Inscribirme", key=f"inscribirse_evento_{evento['id']}", icon=":material/event_available:", width="stretch"):
+                    try:
+                        st.session_state.sb.rpc(
+                            "registrar_asistencia_evento",
+                            {"p_evento_id": int(evento["id"])},
+                        ).execute()
+                        st.success("Inscripción creada. Tu asistencia quedará pendiente hasta que el equipo la confirme en el evento.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"No se pudo completar la inscripción ({type(error).__name__}).")
 
 # --- PESTAÑA 4: RECOMPENSAS ---
 with tabs[":material/redeem: Recompensas"]:
@@ -937,7 +1297,10 @@ with tabs[":material/redeem: Recompensas"]:
                         if st.button("Canjear recompensa", key=f"c_{r.id}", width="stretch", type="primary", disabled=saldo < r.puntos or r.stock <= 0):
                             codigo = uuid.uuid4().hex[:6].upper()
                             try:
-                                codigo = st.session_state.sb.rpc("canjear", {"p_cupon": int(r.id)}).execute().data
+                                codigo = st.session_state.sb.rpc(
+                                    "canjear_evento_recompensa",
+                                    {"p_cupon_id": int(r.id)},
+                                ).execute().data
                                 pass
                                 st.success(f"¡Canje Exitoso! Muestra este código en la tienda: **{codigo}**")
                                 time.sleep(2)
@@ -955,7 +1318,15 @@ with tabs[":material/school: Aprende"]:
         fresca = d.loc[d['LST (°C)'].idxmin()]
         st.info(f"Dato satelital activo: {caliente['Zona']} es aproximadamente {d['LST (°C)'].max() - d['LST (°C)'].min():.1f} °C más caliente en superficie que {fresca['Zona']}.")
 
-    a1, a2, a3, a4, a5 = st.tabs(["Guía de plantas", "Separación de residuos", "Islas de calor", "Conceptos clave", "Mini evaluación"])
+    a1, a2, a3, a4, a5, a6, a7 = st.tabs([
+        "Guía de plantas",
+        "Separación de residuos",
+        "Islas de calor",
+        "Conceptos clave",
+        "Mini evaluación",
+        "Siembra responsable",
+        "Evidencia ciudadana",
+    ])
     with a1:
         filtro = st.segmented_control("Tamaño adulto", ["Todas", "Pequeño-mediano", "Mediano", "Grande"], default="Todas")
         especies = PLANTAS
@@ -1018,13 +1389,55 @@ with tabs[":material/school: Aprende"]:
         q1 = st.radio("¿Qué dato suele indicar una superficie caliente?", ["NDVI alto", "LST alto", "UV bajo"], key="aprende_q1")
         q2 = st.radio("Antes de sembrar en una vía, debes:", ["Comprar rápido", "Confirmar especie y permisos", "Cubrir las raíces"], key="aprende_q2")
         q3 = st.radio("¿Cuál ayuda a reducir una isla de calor?", ["Más asfalto oscuro", "Más sombra y vegetación", "Menos drenaje"], key="aprende_q3")
+        q4 = st.radio("¿Qué puede confirmar una revisión visual de IA?", ["La fecha de la foto", "Solo elementos visibles, no autoría ni ubicación", "Que se otorguen puntos"], key="aprende_q4")
+        q5 = st.radio("¿Cuándo se acreditan puntos por un evento?", ["Al inscribirse", "Cuando un moderador confirma la asistencia", "Al abrir la convocatoria"], key="aprende_q5")
         if st.button("Ver resultado", type="primary", key="aprende_resultado"):
-            aciertos = sum([q1 == "LST alto", q2 == "Confirmar especie y permisos", q3 == "Más sombra y vegetación"])
-            if aciertos == 3:
-                st.success("Resultado perfecto: 3 de 3 respuestas correctas.")
+            aciertos = sum([
+                q1 == "LST alto",
+                q2 == "Confirmar especie y permisos",
+                q3 == "Más sombra y vegetación",
+                q4 == "Solo elementos visibles, no autoría ni ubicación",
+                q5 == "Cuando un moderador confirma la asistencia",
+            ])
+            if aciertos == 5:
+                st.success("Resultado perfecto: 5 de 5 respuestas correctas.")
                 st.balloons()
             else:
-                st.warning(f"Obtuviste {aciertos} de 3. Revisa las secciones y vuelve a intentarlo.")
+                st.warning(f"Obtuviste {aciertos} de 5. Revisa las secciones y vuelve a intentarlo.")
+    with a6:
+        st.markdown("#### Antes, durante y después de una siembra")
+        fases = [
+            ("Antes", "Confirma permisos, responsable del espacio, especie adecuada y disponibilidad de agua. Revisa redes subterráneas, cableado y espacio adulto con la autoridad local."),
+            ("Durante", "Protege las raíces del sol y el viento, evita doblarlas y no entierres el cuello del árbol. Sigue las instrucciones del vivero y del equipo técnico; no improvises junto a vías o redes."),
+            ("Después", "Define quién hará el riego y seguimiento. Registra fecha, especie y ubicación aproximada; revisa el estado del ejemplar y reporta daños a la entidad responsable."),
+        ]
+        for fase, detalle in fases:
+            with st.container(border=True):
+                st.subheader(fase)
+                st.write(detalle)
+        st.warning("No siembres en andenes, separadores ni parques sin autorización. Si hay cables, tuberías, tránsito o árboles inestables, suspende la actividad y contacta a la autoridad competente.")
+        with st.expander("Lista de comprobación para una jornada"):
+            st.markdown(
+                "- Permiso y responsable del sitio confirmados.\n"
+                "- Especie y espacio adulto revisados con personal técnico.\n"
+                "- Agua, herramientas adecuadas y equipo de protección disponibles.\n"
+                "- Ruta segura de acceso y retiro de residuos definida.\n"
+                "- Plan de riego y seguimiento asignado."
+            )
+    with a7:
+        st.markdown("#### Cómo registrar evidencia útil y respetuosa")
+        pautas = [
+            ("Contexto", "Toma una imagen general del lugar y otra clara de la acción, sin depender solo de un primer plano."),
+            ("Claridad", "Evita fotos movidas, oscuras, recortadas o con el objetivo muy lejos. No uses capturas de pantalla ni imágenes descargadas."),
+            ("Privacidad", "No incluyas rostros, placas, documentos, teléfonos ni interiores privados. Pide permiso antes de fotografiar a otras personas."),
+            ("Honestidad", "Describe solo lo que hiciste y lo que la foto muestra. Una imagen no confirma por sí sola fecha, ubicación, autoría o que una planta se haya sembrado recientemente."),
+            ("Seguimiento", "Conserva una foto posterior para observar el estado de la planta, sin exponer datos personales ni ubicaciones sensibles."),
+        ]
+        for titulo, detalle in pautas:
+            with st.container(border=True):
+                st.markdown(f"**{titulo}**")
+                st.write(detalle)
+        st.info("Los reportes de SombraBAQ pasan por revisión humana. La IA brinda orientación visual y no aprueba reportes ni otorga puntos.")
     with st.expander("Fuentes y recursos oficiales"):
         st.caption("Verifica cada fuente antes de compartirla.")
         links = [("Islas de calor urbanas", "https://www.epa.gov/heatislands"),
@@ -1092,6 +1505,46 @@ if user:
                     st.caption(f"{estado_label} · {str(reporte['created_at'])[:16].replace('T', ' ')} · {reporte['puntos']} puntos")
             except Exception:
                 st.caption("No fue posible consultar el estado de tus reportes.")
+
+        with st.expander("Mis eventos e inscripciones"):
+            try:
+                inscripciones = (
+                    sb.table("asistencias_eventos")
+                    .select("id,evento_id,estado,registrado_at,verificado_at")
+                    .eq("usuario_id", user.id)
+                    .order("registrado_at", desc=True)
+                    .limit(50)
+                    .execute()
+                    .data
+                )
+                ids_eventos = list({inscripcion["evento_id"] for inscripcion in inscripciones})
+                eventos_usuario = {}
+                if ids_eventos:
+                    eventos_usuario = {
+                        evento["id"]: evento
+                        for evento in sb.table("eventos_comunitarios")
+                        .select("id,titulo,fecha,puntos,lugar")
+                        .in_("id", ids_eventos)
+                        .execute()
+                        .data
+                    }
+                if not inscripciones:
+                    st.caption("Todavía no tienes inscripciones a eventos.")
+                for inscripcion in inscripciones:
+                    evento_usuario = eventos_usuario.get(inscripcion["evento_id"])
+                    if not evento_usuario:
+                        continue
+                    st.markdown(f"**{evento_usuario['titulo']}** · {evento_usuario['lugar']}")
+                    if inscripcion["estado"] == "confirmada":
+                        st.success(f"Asistencia confirmada · {evento_usuario['puntos']} puntos acreditados.")
+                    elif inscripcion["estado"] == "pendiente":
+                        st.badge("Pendiente de confirmación presencial", icon=":material/schedule:", color="orange")
+                    else:
+                        st.badge("Asistencia no confirmada", icon=":material/cancel:", color="red")
+                    st.caption(f"{formato_fecha_evento(evento_usuario['fecha'])} · Inscripción {str(inscripcion['registrado_at'])[:16]}")
+            except Exception as error:
+                st.warning("No se pudo consultar el historial de eventos. Comprueba que `supabase_events.sql` esté aplicado.")
+                st.caption(f"Diagnóstico: {type(error).__name__}")
         
         with st.expander("🎟️ Mis Códigos Canjeados", expanded=True):
             try:
@@ -1115,6 +1568,146 @@ if user:
 # --- PESTAÑA 8: MODERACIÓN ---
 if admin:
     with tabs[":material/admin_panel_settings: Moderación"]:
+        with st.expander("Publicar una convocatoria", expanded=False):
+            plantilla = st.selectbox("Tipo de actividad", ["Personalizada", *EVENTOS_SUGERIDOS], key="event_template")
+            titulo_evento = st.text_input(
+                "Título",
+                value="" if plantilla == "Personalizada" else plantilla,
+                max_chars=120,
+                key=f"event_title_{plantilla}",
+            )
+            descripcion_evento = st.text_area("Descripción y recomendaciones para asistentes", max_chars=1200)
+            lugar_evento = st.text_input("Lugar de encuentro", max_chars=200)
+            fecha_columnas = st.columns(2)
+            fecha_evento = fecha_columnas[0].date_input(
+                "Fecha",
+                value=dt.date.today() + dt.timedelta(days=7),
+                min_value=dt.date.today(),
+                key="event_date",
+            )
+            hora_evento = fecha_columnas[1].time_input("Hora local", value=dt.time(9, 0), key="event_time")
+            puntos_columnas = st.columns(2)
+            puntos_evento = puntos_columnas[0].number_input("Puntos al confirmar asistencia", min_value=1, max_value=500, value=30, step=5)
+            cupos_evento = puntos_columnas[1].number_input("Cupos", min_value=1, max_value=10000, value=30, step=1)
+            if st.button("Publicar evento", key="publish_event", icon=":material/campaign:", type="primary"):
+                fecha_local = dt.datetime.combine(fecha_evento, hora_evento, tzinfo=ZoneInfo("America/Bogota"))
+                if len(titulo_evento.strip()) < 5 or len(descripcion_evento.strip()) < 10 or len(lugar_evento.strip()) < 3:
+                    st.error("Completa un título, una descripción y un lugar válidos.")
+                elif fecha_local <= dt.datetime.now(ZoneInfo("America/Bogota")):
+                    st.error("La fecha y hora del evento deben ser futuras.")
+                else:
+                    try:
+                        st.session_state.sb.rpc(
+                            "crear_evento_comunitario",
+                            {
+                                "p_titulo": titulo_evento.strip(),
+                                "p_descripcion": descripcion_evento.strip(),
+                                "p_lugar": lugar_evento.strip(),
+                                "p_fecha": fecha_local.isoformat(),
+                                "p_puntos": int(puntos_evento),
+                                "p_cupos": int(cupos_evento),
+                            },
+                        ).execute()
+                        st.success("Evento publicado. La inscripción no acredita puntos hasta confirmar la asistencia.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"No se pudo publicar el evento ({type(error).__name__}).")
+
+        st.subheader("Asistencias pendientes")
+        try:
+            asistencias_pendientes = (
+                st.session_state.sb.table("asistencias_eventos")
+                .select("id,evento_id,usuario_id,registrado_at")
+                .eq("estado", "pendiente")
+                .order("registrado_at")
+                .limit(100)
+                .execute()
+                .data
+            )
+            ids_eventos = list({registro["evento_id"] for registro in asistencias_pendientes})
+            eventos_por_id = {}
+            if ids_eventos:
+                eventos_por_id = {
+                    evento["id"]: evento
+                    for evento in st.session_state.sb.table("eventos_comunitarios")
+                    .select("id,titulo,fecha,es_demo")
+                    .in_("id", ids_eventos)
+                    .execute()
+                    .data
+                }
+            if not asistencias_pendientes:
+                st.caption("No hay asistencias esperando verificación.")
+            for asistencia in asistencias_pendientes:
+                evento_asistencia = eventos_por_id.get(asistencia["evento_id"])
+                with st.container(border=True):
+                    st.markdown(f"**{evento_asistencia['titulo'] if evento_asistencia else 'Evento no disponible'}**")
+                    if evento_asistencia:
+                        st.caption(f"Fecha del evento: {formato_fecha_evento(evento_asistencia['fecha'])}")
+                        if evento_asistencia.get("es_demo"):
+                            st.info("Es un evento de demostración: no confirmes asistencia ni otorgues puntos.")
+                    st.caption(f"Referencia de inscripción: {asistencia['id']} · Usuario: {asistencia['usuario_id']}")
+                    motivo = st.text_input("Nota de verificación (opcional)", max_chars=300, key=f"nota_asistencia_{asistencia['id']}")
+                    confirmar, rechazar = st.columns(2)
+                    fecha_evento_asistencia = (
+                        dt.datetime.fromisoformat(evento_asistencia["fecha"].replace("Z", "+00:00"))
+                        if evento_asistencia
+                        else None
+                    )
+                    if fecha_evento_asistencia and fecha_evento_asistencia.tzinfo is None:
+                        fecha_evento_asistencia = fecha_evento_asistencia.replace(tzinfo=dt.timezone.utc)
+                    puede_confirmar = (
+                        fecha_evento_asistencia is not None
+                        and fecha_evento_asistencia <= dt.datetime.now(dt.timezone.utc)
+                        and not evento_asistencia.get("es_demo")
+                    )
+                    if evento_asistencia and evento_asistencia.get("es_demo"):
+                        st.caption("Las asistencias de eventos DEMO no se pueden confirmar.")
+                    elif not puede_confirmar:
+                        st.info("La asistencia solo se confirma después de la fecha del evento.")
+                    if confirmar.button(
+                        "Confirmar asistencia",
+                        key=f"confirmar_asistencia_{asistencia['id']}",
+                        icon=":material/person_check:",
+                        type="primary",
+                        disabled=not puede_confirmar,
+                        width="stretch",
+                    ):
+                        try:
+                            st.session_state.sb.rpc(
+                                "verificar_asistencia_evento",
+                                {
+                                    "p_asistencia_id": int(asistencia["id"]),
+                                    "p_accion": "confirmar",
+                                    "p_razon": motivo.strip() or None,
+                                },
+                            ).execute()
+                            st.success("Asistencia confirmada; los puntos ya cuentan para los canjes.")
+                            st.rerun()
+                        except Exception as error:
+                            st.error(f"No se pudo confirmar la asistencia ({type(error).__name__}).")
+                    if rechazar.button(
+                        "No asistió",
+                        key=f"rechazar_asistencia_{asistencia['id']}",
+                        icon=":material/person_off:",
+                        width="stretch",
+                    ):
+                        try:
+                            st.session_state.sb.rpc(
+                                "verificar_asistencia_evento",
+                                {
+                                    "p_asistencia_id": int(asistencia["id"]),
+                                    "p_accion": "rechazar",
+                                    "p_razon": motivo.strip() or None,
+                                },
+                            ).execute()
+                            st.success("Asistencia marcada como no confirmada.")
+                            st.rerun()
+                        except Exception as error:
+                            st.error(f"No se pudo actualizar la asistencia ({type(error).__name__}).")
+        except Exception as error:
+            st.warning("El módulo de asistencia requiere aplicar `supabase_events.sql` y revisar permisos de administrador.")
+            st.caption(f"Diagnóstico: {type(error).__name__}")
+
         try:
             pend = st.session_state.sb.table("reportes").select("*").eq("estado", "pendiente").order("created_at").limit(20).execute().data
             st.write(f"**{len(pend)} reportes manuales en cola de revisión**")
@@ -1125,6 +1718,10 @@ if admin:
                     except: c1.caption("Sin evidencia gráfica")
                     c2.markdown(f"**{TIPOS[r['tipo']]}** en {r['zona']}")
                     c2.caption(f"Nota del usuario: {r['nota'] or 'Sin texto'}")
+                    c2.caption(
+                        f"Orientación visual ({(r.get('ia_confianza') or 0):.0%}): "
+                        f"{r.get('ia_detalle') or 'No disponible; revisar manualmente.'}"
+                    )
                     b1, b2, _ = c2.columns([1, 1, 3])
                     razon = c2.text_input("Motivo de moderación", key=f"motivo_{r['id']}", max_chars=300)
                     if b1.button("Aprobar reporte", key=f"a_{r['id']}"):
@@ -1166,3 +1763,4 @@ if admin:
 
 st.divider()
 st.caption("Fuentes: Google Earth Engine (Sentinel-2, Landsat 8/9), Open-Meteo y reportes ciudadanos. SombraBAQ es una plataforma ambiental en fase operativa: la información debe verificarse antes de tomar decisiones críticas.")
+st.caption("Desarrollado y programado por Juan David Barrios, estudiante de Ingeniería de Software de la Universidad de Barranquilla.")
