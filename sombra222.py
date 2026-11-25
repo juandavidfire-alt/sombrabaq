@@ -56,6 +56,9 @@ iframe[title="st_folium"] {border-radius:16px; border:1px solid rgba(22,101,52,.
 .leyenda {height:8px; border-radius:6px; background:linear-gradient(90deg,#22c55e,#a3e635,#facc15,#fb923c,#ef4444); margin:.45rem 0 .25rem;}
 .social-card {background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:1.35rem; margin-bottom:1rem; box-shadow:0 4px 14px rgba(0,0,0,.045);}
 .species-card {border:1px solid rgba(22,101,52,.14); border-radius:16px; padding:1rem; height:100%; background:rgba(255,255,255,.55);}
+[data-testid="stStatusWidget"], [data-testid="stAppDeployButton"],
+[data-testid="stDecoration"], [data-testid="stSkillsNudge"], [data-testid="stSkillsNudgeAnchor"],
+#MainMenu, footer {display:none !important; visibility:hidden !important;}
 @media (max-width: 720px) {
     .block-container {padding:.8rem .85rem 2rem !important;}
     .hero {padding:1.3rem 1.2rem 1.1rem; border-radius:18px; margin-bottom:.9rem;}
@@ -69,10 +72,79 @@ iframe[title="st_folium"] {border-radius:16px; border:1px solid rgba(22,101,52,.
     [data-testid="stTabs"] [role="tab"] {padding:.6rem .65rem;}
     iframe[title="st_folium"] {border-radius:12px;}
 }
-#MainMenu, footer {visibility:hidden;}
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important;}
 }
+</style>""", unsafe_allow_html=True)
+
+if st.session_state.get("modo_oscuro", False):
+    st.markdown("""<style>
+:root, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+    color-scheme:dark;
+    --primary-color:#4ade80;
+    --background-color:#0d1712;
+    --secondary-background-color:#15221b;
+    --text-color:#e5eee8;
+    --link-color:#86efac;
+    --border-color:#2a3d32;
+    --dataframe-border-color:#2a3d32;
+    --code-background-color:#19271f;
+}
+html, body, .stApp {background-color:#0d1712 !important; color:#e5eee8;}
+[data-testid="stAppViewContainer"], [data-testid="stHeader"] {background-color:#0d1712; color:#e5eee8;}
+[data-testid="stSidebar"] {background-color:#101d16; color:#e5eee8; border-color:#2a3d32;}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3, [data-testid="stMarkdownContainer"] h4,
+[data-testid="stCaptionContainer"], label {color:#e5eee8;}
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stForm"],
+[data-testid="stExpander"], [data-testid="stDataFrame"], [data-testid="stTable"] {
+    background-color:#15221b;
+    border-color:#2a3d32;
+}
+[data-testid="stVerticalBlock"], [data-testid="stMetric"] {border-color:#2a3d32 !important;}
+[data-testid="stMetric"] {background-color:#15221b;}
+[data-testid="stTabs"] [role="tablist"] {border-color:#2a3d32;}
+[data-testid="stTabs"] [role="tab"]:hover {background:rgba(74,222,128,.08);}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    color:#86efac;
+    background:rgba(74,222,128,.12);
+    box-shadow:inset 0 -2px #4ade80;
+}
+[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input, [data-testid="stSelectbox"] [role="group"] {
+    background-color:#101d16;
+    color:#e5eee8;
+    border-color:#35483c;
+}
+[data-testid="stSelectbox"] [role="combobox"] {background:transparent; color:#e5eee8;}
+[data-testid="stSelectbox"] [role="group"] button {color:#e5eee8;}
+[role="listbox"], [role="option"] {background-color:#15221b; color:#e5eee8;}
+[role="option"][aria-selected="true"] {background-color:#254132; color:#f0fdf4;}
+[data-testid="stAlertContainer"] {
+    background-color:#1a2a21 !important;
+    color:#e5eee8 !important;
+    border:1px solid #344c3a !important;
+}
+[data-testid="stMetricDelta"] {background-color:#1a3b2d; color:#a7f3d0;}
+[data-testid="stMetricChart"] {display:none !important;}
+[data-testid="stDialog"] {background-color:#15221b; border-color:#2a3d32;}
+[data-testid="stButton"] button:not([kind="primary"]),
+[data-testid="stFormSubmitButton"] button:not([kind="primary"]) {
+    background-color:#1a2a21;
+    color:#e5eee8;
+    border-color:#35483c;
+}
+[data-testid="stButton"] button[kind="primary"],
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+    background-color:#166534;
+    color:#fff;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {border-color:#42624c; box-shadow:0 8px 24px rgba(0,0,0,.2);}
+.live-status {background:#15251c; border-color:#31513a;}
+.social-card, .species-card {background:#15221b; border-color:#2a3d32; color:#e5eee8;}
+::-webkit-scrollbar-thumb {background:#40564a;}
+iframe[title="st_folium"] {border-color:#2a3d32;}
 </style>""", unsafe_allow_html=True)
 
 # ---------- CONSTANTES Y CONFIGURACIÓN ----------
@@ -412,6 +484,11 @@ def generar_alertas(info, aire, aq):
 def sidebar():
     st.sidebar.markdown("### :material/park: SombraBAQ")
     st.sidebar.caption("Observatorio ambiental")
+    st.sidebar.toggle(
+        "Modo oscuro",
+        key="modo_oscuro",
+        persist_state="session",
+    )
     with st.sidebar.container(border=True):
         st.markdown("**Configuración del análisis**")
         dias = st.slider("Ventana satelital", 20, 120, 60, 10, help="Periodo usado para combinar imágenes satelitales.")
