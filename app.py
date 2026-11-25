@@ -32,46 +32,6 @@ def gee_error_message(error, info):
     return message[:600]
 
 
-with st.expander("Diagnóstico temporal de Earth Engine"):
-    info = None
-    try:
-        info = dict(st.secrets["gee_service_account"])
-    except KeyError:
-        st.error("Falta `gee_service_account` en los secretos de Streamlit.")
-    except Exception as error:
-        st.error(f"No se pudo leer `gee_service_account`: {type(error).__name__}")
-
-    if info is not None:
-        st.success("Streamlit encontró las credenciales.")
-        if st.button("Probar conexión con Earth Engine", key="probar_conexion_gee"):
-            email = str(info.get("client_email") or "").strip()
-            private_key = str(info.get("private_key") or "").replace("\\n", "\n").strip()
-            project_id = str(info.get("project_id") or "").strip()
-            missing = [
-                field for field, value in (
-                    ("client_email", email),
-                    ("private_key", private_key),
-                    ("project_id", project_id),
-                )
-                if not value
-            ]
-
-            if missing:
-                st.error("Faltan campos en `gee_service_account`: " + ", ".join(missing))
-            else:
-                try:
-                    import ee
-
-                    credentials = gee_service_account_credentials(info)
-                    ee.Initialize(credentials, project=project_id)
-                    resultado = ee.Number(1).getInfo()
-                    st.success(f"Earth Engine conectado: {resultado}")
-                except Exception as error:
-                    st.error(f"Error de conexión: {type(error).__name__}")
-                    mensaje = gee_error_message(error, info)
-                    if mensaje:
-                        st.code(mensaje)
-
 st.markdown("""<style>
 .block-container {padding:1.45rem 2rem 3.2rem !important; max-width:1520px;}
 .hero {background:radial-gradient(ellipse at 92% 10%,rgba(134,239,172,.2),transparent 30%),linear-gradient(118deg,#102f25 0%,#166534 58%,#087f73 100%); border:1px solid rgba(255,255,255,.18); border-radius:24px; padding:2rem 2.1rem 1.65rem; margin-bottom:1.15rem; color:white; box-shadow:0 16px 42px rgba(18,55,42,.18); position:relative; overflow:hidden; isolation:isolate;}
@@ -118,9 +78,13 @@ iframe[title="st_folium"] {border-radius:16px; border:1px solid rgba(22,101,52,.
     .hero p {font-size:.92rem;}
     .hero-tags {gap:.4rem; margin-top:.9rem;}
     .hero-tag {font-size:.7rem; padding:.32rem .58rem;}
+    [data-testid="stDialog"] [data-testid="stForm"] {padding:.75rem !important;}
+    [data-testid="stDialog"] [data-testid="stTextInput"],
+    [data-testid="stDialog"] [data-testid="stSelectbox"] {margin-bottom:.2rem;}
     [data-testid="stTabs"] [role="tab"] {padding:.6rem .65rem;}
     iframe[title="st_folium"] {border-radius:12px;}
 }
+#MainMenu, footer {visibility:hidden;}
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important;}
 }
@@ -334,7 +298,7 @@ def analizar_foto(datos, tipo):
             "Para una plantación, busca una plántula o árbol joven claramente colocado en tierra, "
             "con el tallo y el punto de plantación visibles. No cuentes árboles adultos ya establecidos, "
             "césped, hojas, viveros, plantas en maceta, imágenes de pantalla ni vegetación de fondo como "
-            "prueba de una plantación reciente. Si el encuadre no muestra señales suficientes, marca "
+            "evidencia de una plantación reciente. Si el encuadre no muestra señales suficientes, marca "
             "cumple=false y baja confianza. Una foto nunca demuestra quién sembró, cuándo ocurrió ni "
             "si el lugar tiene permisos. "
             if tipo == "siembra"
@@ -446,7 +410,7 @@ def _publicar(sb, user, ia, zona_cercana, reportes_publicos):
         st.error(f"Error interno al guardar: Es posible que la foto esté duplicada o falten permisos. Detalles: {ex}")
 
 # ---------- BARRA LATERAL Y AUTENTICACIÓN ----------
-def entrar(sb, email, password):
+def entrar(sb, email, password, error_container=None):
     try:
         r = sb.auth.sign_in_with_password({"email": email, "password": password})
         st.session_state.user = r.user; sb.postgrest.auth(r.session.access_token)
@@ -456,25 +420,26 @@ def entrar(sb, email, password):
         pr = sb.table("perfiles").select("*").eq("user_id", r.user.id).execute().data
         st.session_state.datos_perfil = pr[0] if pr else {}
         st.rerun()
-    except Exception: st.sidebar.error("Credenciales incorrectas o correo sin confirmar.")
+    except Exception:
+        destino = st.sidebar if error_container is None else error_container
+        destino.error("Credenciales incorrectas o correo sin confirmar.")
 
-@st.dialog("Crear cuenta ciudadana", width="large")
+@st.dialog("Crear cuenta ciudadana", width="small")
 def dialogo_registro():
     sb = sb_client()
     with st.form("registro"):
-        st.markdown("**Datos personales**")
-        c1, c2 = st.columns(2)
-        n = c1.text_input("Nombres *")
-        a = c2.text_input("Apellidos *")
-        td = c1.selectbox("Tipo doc *", list(TIPOS_DOC))
-        nd = c2.text_input("Número doc *")
-        tl = c1.text_input("Celular *")
-        z = c2.selectbox("Zona", list(ZONAS))
-        st.markdown("**Datos de acceso**")
-        e = st.text_input("Correo electrónico *")
-        p1 = st.text_input("Contraseña *", type="password")
-        p2 = st.text_input("Repetir Contraseña *", type="password")
-        if st.form_submit_button("Registrar Cuenta", type="primary", width="stretch"):
+        st.caption("Completa tus datos para participar en la comunidad.")
+        n = st.text_input("Nombres", max_chars=80)
+        a = st.text_input("Apellidos", max_chars=80)
+        td = st.selectbox("Tipo de documento", list(TIPOS_DOC))
+        nd = st.text_input("Número de documento", max_chars=30)
+        tl = st.text_input("Celular", max_chars=30, type="tel")
+        z = st.selectbox("Zona", list(ZONAS))
+        e = st.text_input("Correo electrónico", max_chars=254, type="email")
+        p1 = st.text_input("Contraseña", type="password", help="Usa al menos 8 caracteres.")
+        p2 = st.text_input("Confirma la contraseña", type="password")
+        st.caption("Tu documento y celular se usan para gestionar tu cuenta. No los incluyas en publicaciones.")
+        if st.form_submit_button("Crear cuenta", type="primary", width="stretch"):
             correo = e.strip().lower()
             if not all([n.strip(), a.strip(), nd.strip(), tl.strip(), correo]):
                 st.error("Completa todos los campos obligatorios.")
@@ -503,9 +468,9 @@ def dialogo_registro():
                         entrar(sb, correo, p1)
                     else:
                         st.session_state.confirmacion_pendiente = correo
-                        st.success("La solicitud de registro fue aceptada por Supabase.")
+                        st.success("Recibimos tu solicitud de registro.")
                         st.info(
-                            "Si la confirmación por correo está activada, revisa tu bandeja de entrada y spam. "
+                            "Revisa tu correo y la carpeta de spam para confirmar la cuenta. "
                             "La entrega depende de la configuración de correo SMTP del proyecto."
                         )
                 except Exception as ex:
@@ -545,6 +510,15 @@ def dialogo_registro():
                     )
                 else:
                     st.error(f"No fue posible reenviar la confirmación: {mensaje}")
+
+@st.dialog("Inicia sesión", width="small")
+def dialogo_inicio_sesion():
+    sb = sb_client()
+    with st.form("inicio_sesion_principal"):
+        email = st.text_input("Correo electrónico", max_chars=254, type="email")
+        password = st.text_input("Contraseña", type="password")
+        if st.form_submit_button("Ingresar", type="primary", width="stretch"):
+            entrar(sb, email.strip().lower(), password, error_container=st)
 
 def generar_alertas(info, aire, aq):
     out, lm = [], info["LST (°C)"].mean()
@@ -625,6 +599,23 @@ if not cfg()[1]:
             language="toml",
         )
         st.caption("Copia los valores desde Supabase → Project Settings → API. No publiques ni compartas claves secretas.")
+
+if not user and cfg()[1]:
+    with st.container(horizontal=True, vertical_alignment="center", wrap=True):
+        st.markdown("**Participa en las acciones ambientales de Barranquilla.**")
+        if st.button(
+            "Crear cuenta",
+            key="crear_cuenta_principal",
+            icon=":material/person_add:",
+            type="primary",
+        ):
+            dialogo_registro()
+        if st.button(
+            "Iniciar sesión",
+            key="abrir_inicio_sesion",
+            icon=":material/login:",
+        ):
+            dialogo_inicio_sesion()
 
 @st.fragment(run_every=60)
 def estado_en_vivo():
@@ -860,8 +851,8 @@ with tabs[":material/map: Mapa inteligente"]:
             st.markdown(
                 "Las imágenes de vegetación y temperatura superficial requieren configurar "
                 "Google Earth Engine y que el proyecto y la cuenta de servicio estén autorizados. "
-                "Revisa el diagnóstico temporal al inicio de la página. Mientras tanto, el mapa "
-                "y las mediciones meteorológicas siguen disponibles."
+                "Comprueba la autorización del proyecto y las credenciales de Google Earth Engine. "
+                "Mientras tanto, el mapa y las mediciones meteorológicas siguen disponibles."
             )
 
         mapa_col, panel_col = st.columns([3, 1.1])
@@ -1235,7 +1226,7 @@ with tabs[":material/groups: Comunidad"]:
                 st.caption(f"Diagnóstico: {codigo_error}")
             else:
                 st.error("No se pudieron cargar los eventos. Revisa la conexión, el esquema y los permisos de Supabase.")
-                st.caption(f"Diagnóstico: {codigo_error or type(error).__name__}")
+                st.caption(f"Referencia: {codigo_error or type(error).__name__}")
 
         if eventos_disponibles and not eventos:
             st.info("Aún no hay convocatorias publicadas. El equipo administrador puede crear eventos desde Moderación.")
@@ -1271,6 +1262,8 @@ with tabs[":material/groups: Comunidad"]:
                         st.rerun()
                     except Exception as error:
                         st.error(f"No se pudo completar la inscripción ({type(error).__name__}).")
+
+
 
 # --- PESTAÑA 4: RECOMPENSAS ---
 with tabs[":material/redeem: Recompensas"]:
@@ -1323,7 +1316,7 @@ with tabs[":material/school: Aprende"]:
         "Separación de residuos",
         "Islas de calor",
         "Conceptos clave",
-        "Mini evaluación",
+        "Acciones locales",
         "Siembra responsable",
         "Evidencia ciudadana",
     ])
@@ -1385,25 +1378,17 @@ with tabs[":material/school: Aprende"]:
         with st.expander("¿Cómo interpretar los puntos prioritarios?"):
             st.write("Los puntos son señales satelitales, no órdenes de siembra. Deben verificarse en campo antes de intervenir.")
     with a5:
-        st.markdown("#### Comprueba lo aprendido")
-        q1 = st.radio("¿Qué dato suele indicar una superficie caliente?", ["NDVI alto", "LST alto", "UV bajo"], key="aprende_q1")
-        q2 = st.radio("Antes de sembrar en una vía, debes:", ["Comprar rápido", "Confirmar especie y permisos", "Cubrir las raíces"], key="aprende_q2")
-        q3 = st.radio("¿Cuál ayuda a reducir una isla de calor?", ["Más asfalto oscuro", "Más sombra y vegetación", "Menos drenaje"], key="aprende_q3")
-        q4 = st.radio("¿Qué puede confirmar una revisión visual de IA?", ["La fecha de la foto", "Solo elementos visibles, no autoría ni ubicación", "Que se otorguen puntos"], key="aprende_q4")
-        q5 = st.radio("¿Cuándo se acreditan puntos por un evento?", ["Al inscribirse", "Cuando un moderador confirma la asistencia", "Al abrir la convocatoria"], key="aprende_q5")
-        if st.button("Ver resultado", type="primary", key="aprende_resultado"):
-            aciertos = sum([
-                q1 == "LST alto",
-                q2 == "Confirmar especie y permisos",
-                q3 == "Más sombra y vegetación",
-                q4 == "Solo elementos visibles, no autoría ni ubicación",
-                q5 == "Cuando un moderador confirma la asistencia",
-            ])
-            if aciertos == 5:
-                st.success("Resultado perfecto: 5 de 5 respuestas correctas.")
-                st.balloons()
-            else:
-                st.warning(f"Obtuviste {aciertos} de 5. Revisa las secciones y vuelve a intentarlo.")
+        st.markdown("#### Acciones ambientales en tu entorno")
+        acciones = [
+            ("En casa", "Separa los residuos, reduce productos desechables y lleva pilas o aparatos electrónicos a puntos de recolección autorizados."),
+            ("En tu barrio", "Reporta acumulaciones de residuos e identifica zonas sin sombra. Comparte ubicación aproximada, sin exponer datos personales."),
+            ("En espacios verdes", "Coordina las actividades con responsables del lugar. Confirma permisos, especies apropiadas y plan de riego antes de sembrar."),
+            ("Durante una jornada", "Lleva agua, usa protección solar, respeta las indicaciones del equipo y no intervengas cerca de redes o zonas de tránsito."),
+        ]
+        for titulo, detalle in acciones:
+            with st.container(border=True):
+                st.markdown(f"**{titulo}**")
+                st.write(detalle)
     with a6:
         st.markdown("#### Antes, durante y después de una siembra")
         fases = [
@@ -1543,7 +1528,7 @@ if user:
                         st.badge("Asistencia no confirmada", icon=":material/cancel:", color="red")
                     st.caption(f"{formato_fecha_evento(evento_usuario['fecha'])} · Inscripción {str(inscripcion['registrado_at'])[:16]}")
             except Exception as error:
-                st.warning("No se pudo consultar el historial de eventos. Comprueba que `supabase_events.sql` esté aplicado.")
+                st.warning("No se pudo consultar el historial de eventos. Confirma que `supabase_events.sql` esté aplicado.")
                 st.caption(f"Diagnóstico: {type(error).__name__}")
         
         with st.expander("🎟️ Mis Códigos Canjeados", expanded=True):

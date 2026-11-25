@@ -17,6 +17,9 @@ paddingTop = "1.25rem"
 paddingBottom = "2.5rem"
 chartCategoricalColors = ["#166534", "#087f73", "#f59e0b", "#ef4444", "#2563eb"]
 
+[client]
+toolbarMode = "minimal"
+
 [theme.sidebar]
 backgroundColor = "#eef5f0"
 secondaryBackgroundColor = "#e3ede7"
