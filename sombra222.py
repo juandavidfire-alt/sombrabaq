@@ -326,9 +326,9 @@ def dialogo_registro():
         a = st.text_input("Apellidos", max_chars=80)
         td = st.selectbox("Tipo de documento", list(TIPOS_DOC))
         nd = st.text_input("Número de documento", max_chars=30)
-        tl = st.text_input("Celular", max_chars=30, type="tel")
+        tl = st.text_input("Celular", max_chars=30)
         z = st.selectbox("Zona", list(ZONAS))
-        e = st.text_input("Correo electrónico", max_chars=254, type="email")
+        e = st.text_input("Correo electrónico", max_chars=254)
         p1 = st.text_input("Contraseña", type="password", help="Usa al menos 8 caracteres.")
         p2 = st.text_input("Confirma la contraseña", type="password")
         st.caption("Tu documento y celular se usan para gestionar tu cuenta. No los incluyas en publicaciones.")
@@ -389,7 +389,7 @@ def dialogo_registro():
 def dialogo_inicio_sesion():
     sb = sb_client()
     with st.form("inicio_sesion_principal"):
-        email = st.text_input("Correo electrónico", max_chars=254, type="email")
+        email = st.text_input("Correo electrónico", max_chars=254)
         password = st.text_input("Contraseña", type="password")
         if st.form_submit_button("Ingresar", type="primary", width="stretch"):
             entrar(sb, email.strip().lower(), password, error_container=st)
